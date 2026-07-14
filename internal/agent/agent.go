@@ -246,6 +246,10 @@ type InvocationWorkload struct {
 // ACPRegistryOverrides maps acpx target names to raw ACP agent commands.
 type Options struct {
 	ACPRegistryOverrides map[string]string
+	// Model and Effort are explicit run-scoped choices. Adapters translate them
+	// to their native flags after global extra args so the run override wins.
+	Model  string
+	Effort string
 	// DisableProjectSettings, when true, asks a supported adapter (codex,
 	// claude) to launch with the target repo's project-level agent
 	// settings/instructions suppressed. It is the resolved, trusted-only opt-out
@@ -798,9 +802,9 @@ func NewWithOptions(name types.AgentName, bin string, extraArgs []string, opts O
 	}
 	switch name {
 	case types.AgentClaude:
-		return &claudeAgent{bin: bin, extraArgs: extraArgs, disableProjectSettings: opts.DisableProjectSettings}, nil
+		return &claudeAgent{bin: bin, extraArgs: extraArgs, model: opts.Model, effort: opts.Effort, disableProjectSettings: opts.DisableProjectSettings}, nil
 	case types.AgentCodex:
-		return &codexAgent{bin: bin, extraArgs: extraArgs, disableProjectSettings: opts.DisableProjectSettings}, nil
+		return &codexAgent{bin: bin, extraArgs: extraArgs, model: opts.Model, effort: opts.Effort, disableProjectSettings: opts.DisableProjectSettings}, nil
 	case types.AgentRovoDev:
 		return &rovodevAgent{bin: bin, extraArgs: extraArgs}, nil
 	case types.AgentOpenCode:

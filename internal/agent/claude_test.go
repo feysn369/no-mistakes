@@ -34,6 +34,20 @@ func TestClaudeAgent_BuildArgs(t *testing.T) {
 	}
 }
 
+func TestClaudeAgent_RunTuningOverridesGlobalArgs(t *testing.T) {
+	a := &claudeAgent{
+		bin:       "claude",
+		extraArgs: []string{"--model", "old", "--effort", "low"},
+		model:     "sonnet",
+		effort:    "high",
+	}
+	args := a.buildArgs("review", nil, "")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--model\x00old\x00--effort\x00low\x00--model\x00sonnet\x00--effort\x00high") {
+		t.Fatalf("run tuning must follow global args so it wins: %v", args)
+	}
+}
+
 func TestClaudeAgent_BuildArgs_NoSchema(t *testing.T) {
 	ca := &claudeAgent{bin: "claude"}
 	args := ca.buildArgs("prompt", nil, "")

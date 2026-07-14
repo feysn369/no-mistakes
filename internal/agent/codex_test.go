@@ -33,6 +33,20 @@ func TestCodexAgent_BuildArgs(t *testing.T) {
 	}
 }
 
+func TestCodexAgent_RunTuningOverridesGlobalArgs(t *testing.T) {
+	a := &codexAgent{
+		bin:       "codex",
+		extraArgs: []string{"--model", "old", "--config", `model_reasoning_effort="low"`},
+		model:     "gpt-5.5",
+		effort:    "xhigh",
+	}
+	args := a.buildArgs("review", "", "")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--model\x00old\x00--config\x00model_reasoning_effort=\"low\"\x00--model\x00gpt-5.5\x00--config\x00model_reasoning_effort=\"xhigh\"") {
+		t.Fatalf("run tuning must follow global args so it wins: %v", args)
+	}
+}
+
 func TestCodexAgent_BuildArgs_ExtraArgsAfterExec(t *testing.T) {
 	ca := &codexAgent{bin: "codex", extraArgs: []string{"-m", "gpt-5.4"}}
 	args := ca.buildArgs("fix it", "", "")

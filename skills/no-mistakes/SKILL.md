@@ -22,6 +22,11 @@ The selection applies to this entire run, including every review and fix round,
 and disables configured agent fallback for the run. A bare `/no-mistakes`
 keeps the configured agent selection. If reattaching, preserve the original
 selection; a conflicting `--agent` is an error rather than an agent switch.
+When the user also names a model or effort, append `--model <name>` and
+`--effort <low|medium|high|xhigh|max>` to the fresh run.
+Model and effort require an explicit `--agent` because model names and supported effort levels are provider-specific.
+These choices apply to every agent-backed step and fix round in that run and never change shared configuration.
+On reattach or rerun, preserve them unless the user explicitly replaces them between runs.
 
 ## Two ways to invoke
 
@@ -97,7 +102,7 @@ Run the pipeline and decide on its findings as they come up:
 
 1. Start the run. It blocks until the first decision point or the end:
    ```sh
-   no-mistakes axi run --intent "<what the user set out to accomplish>" [--agent codex|claude]
+   no-mistakes axi run --intent "<what the user set out to accomplish>" [--agent codex|claude [--model <name>] [--effort <level>]]
    ```
    `axi run` and every `axi respond` block synchronously - the review, test,
    and CI steps can each take **several minutes**, so a single call may not
