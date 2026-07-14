@@ -72,7 +72,8 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, err := parseRunTuning(agentName, model, effort); err != nil {
+			adaptiveProfile := hasPushOption(pushOptions, adaptiveProfilePushOption)
+			if _, err := parseRunTuning(agentName, model, effort, adaptiveProfile); err != nil {
 				return err
 			}
 			gatePath, err := normalizeNotifyGatePath(gate)
@@ -93,15 +94,16 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 
 			var result ipc.PushReceivedResult
 			return client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
-				Gate:      gatePath,
-				Ref:       ref,
-				Old:       oldSHA,
-				New:       newSHA,
-				SkipSteps: skipSteps,
-				Intent:    intent,
-				Agent:     agentName,
-				Model:     model,
-				Effort:    effort,
+				Gate:            gatePath,
+				Ref:             ref,
+				Old:             oldSHA,
+				New:             newSHA,
+				SkipSteps:       skipSteps,
+				Intent:          intent,
+				Agent:           agentName,
+				Model:           model,
+				Effort:          effort,
+				AdaptiveProfile: adaptiveProfile,
 			}, &result)
 		},
 	}
@@ -122,6 +124,7 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 const agentPushOptionPrefix = "no-mistakes.agent="
 const modelPushOptionPrefix = "no-mistakes.model="
 const effortPushOptionPrefix = "no-mistakes.effort="
+const adaptiveProfilePushOption = "no-mistakes.adaptive-profile"
 
 func parseRunAgent(value string) (types.AgentName, error) {
 	name := types.AgentName(strings.TrimSpace(value))
@@ -131,11 +134,14 @@ func parseRunAgent(value string) (types.AgentName, error) {
 	return "", fmt.Errorf("unsupported run agent %q (valid: claude, codex)", value)
 }
 
-func parseRunTuning(agentName types.AgentName, model, effort string) (types.RunOverrides, error) {
+func parseRunTuning(agentName types.AgentName, model, effort string, adaptiveProfile bool) (types.RunOverrides, error) {
 	model = strings.TrimSpace(model)
 	effort = strings.TrimSpace(effort)
 	if (model != "" || effort != "") && agentName == "" {
 		return types.RunOverrides{}, fmt.Errorf("--model/--effort require --agent because model names and effort support are provider-specific")
+	}
+	if adaptiveProfile && (agentName == "" || model == "" || effort == "") {
+		return types.RunOverrides{}, fmt.Errorf("--adaptive-profile requires --agent, --model, and --effort")
 	}
 	if model != "" {
 		if len(model) > 128 || strings.ContainsAny(model, " \t\r\n") {
@@ -148,7 +154,16 @@ func parseRunTuning(agentName types.AgentName, model, effort string) (types.RunO
 			return types.RunOverrides{}, fmt.Errorf("unsupported effort %q for %s (valid: low, medium, high, xhigh%s)", effort, agentName, map[bool]string{true: ", max"}[agentName == types.AgentClaude])
 		}
 	}
-	return types.RunOverrides{Agent: agentName, Model: model, Effort: effort}, nil
+	return types.RunOverrides{Agent: agentName, Model: model, Effort: effort, AdaptiveProfile: adaptiveProfile}, nil
+}
+
+func hasPushOption(options []string, wanted string) bool {
+	for _, option := range options {
+		if option == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func formatAgentPushOption(name types.AgentName) string {

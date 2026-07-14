@@ -203,14 +203,15 @@ type Config struct {
 	SessionReuse         bool
 	// RunModel and RunEffort are transient persisted run overrides restored by
 	// daemon recovery. They are never read from repository configuration.
-	RunModel       string
-	RunEffort      string
-	Commands       Commands
-	IgnorePatterns []string
-	AutoFix        AutoFix
-	Intent         Intent
-	Test           Test
-	Document       Document
+	RunModel           string
+	RunEffort          string
+	RunAdaptiveProfile bool
+	Commands           Commands
+	IgnorePatterns     []string
+	AutoFix            AutoFix
+	Intent             Intent
+	Test               Test
+	Document           Document
 	// DisableProjectSettings is the resolved, trusted-only opt-out (see the
 	// RepoConfig field). When true, gate agents are launched with their
 	// project-level settings/instructions suppressed; the daemon fails the run

@@ -440,7 +440,7 @@ func TestConfigErrorForFreshAxiRunAllowsReattach(t *testing.T) {
 }
 
 func TestRerunParamsIncludeSkipSteps(t *testing.T) {
-	params := rerunParams("repo-1", "feature/x", []types.StepName{types.StepReview}, "user goal", types.RunOverrides{Agent: types.AgentCodex, Model: "gpt-5.5", Effort: "high"})
+	params := rerunParams("repo-1", "feature/x", []types.StepName{types.StepReview}, "user goal", types.RunOverrides{Agent: types.AgentCodex, Model: "gpt-5.5", Effort: "high", AdaptiveProfile: true})
 	if params.RepoID != "repo-1" || params.Branch != "feature/x" || params.Intent != "user goal" {
 		t.Fatalf("unexpected rerun params: %#v", params)
 	}
@@ -453,6 +453,9 @@ func TestRerunParamsIncludeSkipSteps(t *testing.T) {
 	if params.Model != "gpt-5.5" || params.Effort != "high" {
 		t.Fatalf("tuning = %q/%q, want gpt-5.5/high", params.Model, params.Effort)
 	}
+	if !params.AdaptiveProfile {
+		t.Fatal("adaptive profile mode missing from rerun params")
+	}
 }
 
 func TestActiveRunAgentOverrideMustMatch(t *testing.T) {
@@ -464,6 +467,24 @@ func TestActiveRunAgentOverrideMustMatch(t *testing.T) {
 	}
 	if got := activeRunOverrideConflict(run, types.RunOverrides{Agent: types.AgentClaude}); got == nil {
 		t.Fatal("conflicting override should fail")
+	}
+}
+
+func TestActiveRunAdaptiveProfileMustMatchExplicitReattach(t *testing.T) {
+	codex, model, effort := "codex", "gpt-5.5", "medium"
+	adaptive := &ipc.RunInfo{ID: "run-adaptive", RequestedAgent: &codex, ResolvedAgent: &codex, RequestedModel: &model, RequestedEffort: &effort, AdaptiveProfile: true}
+
+	if got := activeRunOverrideConflict(adaptive, types.RunOverrides{}); got != nil {
+		t.Fatalf("flag-free reattach should preserve the active mode: %v", got)
+	}
+	if got := activeRunOverrideConflict(adaptive, types.RunOverrides{Agent: types.AgentCodex, Model: model, Effort: effort}); got == nil {
+		t.Fatal("locked flags must not silently reattach to an adaptive run")
+	}
+	locked := *adaptive
+	locked.ID = "run-locked"
+	locked.AdaptiveProfile = false
+	if got := activeRunOverrideConflict(&locked, types.RunOverrides{Agent: types.AgentCodex, Model: model, Effort: effort, AdaptiveProfile: true}); got == nil {
+		t.Fatal("adaptive flags must not silently reattach to a locked run")
 	}
 }
 
