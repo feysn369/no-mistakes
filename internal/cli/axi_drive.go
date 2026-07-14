@@ -62,6 +62,7 @@ func newAxiRunCmd() *cobra.Command {
 	var agentValue string
 	var modelValue string
 	var effortValue string
+	var adaptiveProfile bool
 
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -89,6 +90,7 @@ func newAxiRunCmd() *cobra.Command {
 				"has_agent":  strings.TrimSpace(agentValue) != "",
 				"has_model":  strings.TrimSpace(modelValue) != "",
 				"has_effort": strings.TrimSpace(effortValue) != "",
+				"adaptive":   adaptiveProfile,
 			}, func() error {
 				skipSteps, err := parseSkipSteps(skipValue)
 				if err != nil {
@@ -99,7 +101,7 @@ func newAxiRunCmd() *cobra.Command {
 				if err != nil {
 					return emitError(cmd, 2, err.Error())
 				}
-				overrides, err := parseRunTuning(agentName, modelValue, effortValue)
+				overrides, err := parseRunTuning(agentName, modelValue, effortValue, adaptiveProfile)
 				if err != nil {
 					return emitError(cmd, 2, err.Error())
 				}
@@ -113,6 +115,7 @@ func newAxiRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&agentValue, "agent", "", "pipeline agent for this run only (claude or codex)")
 	cmd.Flags().StringVar(&modelValue, "model", "", "model for this run only (requires --agent)")
 	cmd.Flags().StringVar(&effortValue, "effort", "", "reasoning effort for this run only (requires --agent)")
+	cmd.Flags().BoolVar(&adaptiveProfile, "adaptive-profile", false, "treat model/effort as a baseline and allow configured purpose profiles to override them")
 	return cmd
 }
 
@@ -197,6 +200,12 @@ func activeRunOverrideConflict(active *ipc.RunInfo, overrides types.RunOverrides
 	}
 	if overrides.Effort != "" && stringValue(active.RequestedEffort) != overrides.Effort {
 		return fmt.Errorf("active run %s uses effort %q; cannot reattach with --effort %s", active.ID, stringValue(active.RequestedEffort), overrides.Effort)
+	}
+	if overrides.AdaptiveProfile && !active.AdaptiveProfile {
+		return fmt.Errorf("active run %s uses a locked profile; cannot reattach with --adaptive-profile", active.ID)
+	}
+	if !overrides.AdaptiveProfile && active.AdaptiveProfile && (overrides.Agent != "" || overrides.Model != "" || overrides.Effort != "") {
+		return fmt.Errorf("active run %s uses an adaptive profile; reattach without profile flags or include --adaptive-profile", active.ID)
 	}
 	return nil
 }
@@ -293,6 +302,9 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 	}
 	if opt := formatStringPushOption(effortPushOptionPrefix, overrides.Effort); opt != "" {
 		pushOptions = append(pushOptions, opt)
+	}
+	if overrides.AdaptiveProfile {
+		pushOptions = append(pushOptions, adaptiveProfilePushOption)
 	}
 	priorRunIDs, err := runIDsForHead(env.client, env.repo.ID, branch, headSHA)
 	if err != nil {
@@ -397,7 +409,7 @@ func activeRunLookupParams(repoID, branch string) *ipc.GetActiveRunParams {
 }
 
 func rerunParams(repoID, branch string, skipSteps []types.StepName, intent string, overrides types.RunOverrides) *ipc.RerunParams {
-	return &ipc.RerunParams{RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent, Agent: overrides.Agent, Model: overrides.Model, Effort: overrides.Effort}
+	return &ipc.RerunParams{RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent, Agent: overrides.Agent, Model: overrides.Model, Effort: overrides.Effort, AdaptiveProfile: overrides.AdaptiveProfile}
 }
 
 // driveRun polls a run until it reaches an approval gate, a terminal state, or

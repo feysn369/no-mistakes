@@ -20,16 +20,21 @@ import (
 
 func TestInheritRunOverridesDoesNotCrossProviders(t *testing.T) {
 	codex, model, effort := "codex", "gpt-5.5", "xhigh"
-	previous := &db.Run{RequestedAgent: &codex, RequestedModel: &model, RequestedEffort: &effort}
+	previous := &db.Run{RequestedAgent: &codex, RequestedModel: &model, RequestedEffort: &effort, AdaptiveProfile: true}
 
 	got := inheritRunOverrides(types.RunOverrides{}, previous)
-	if got.Agent != types.AgentCodex || got.Model != model || got.Effort != effort {
+	if got.Agent != types.AgentCodex || got.Model != model || got.Effort != effort || !got.AdaptiveProfile {
 		t.Fatalf("same-provider rerun should inherit all choices: %#v", got)
 	}
 
 	got = inheritRunOverrides(types.RunOverrides{Agent: types.AgentClaude}, previous)
-	if got.Model != "" || got.Effort != "" {
+	if got.Model != "" || got.Effort != "" || got.AdaptiveProfile {
 		t.Fatalf("provider switch must not inherit provider-specific tuning: %#v", got)
+	}
+
+	got = inheritRunOverrides(types.RunOverrides{Agent: types.AgentCodex, Model: model, Effort: effort}, previous)
+	if got.AdaptiveProfile {
+		t.Fatalf("explicit rerun profile should be locked: %#v", got)
 	}
 }
 
@@ -41,11 +46,12 @@ func TestApplyRecoveredRunAgentRestoresProviderAndTuning(t *testing.T) {
 		ResolvedAgent:   &codex,
 		RequestedModel:  &model,
 		RequestedEffort: &effort,
+		AdaptiveProfile: true,
 	})
 	if cfg.Agent != types.AgentCodex || len(cfg.Agents) != 1 || cfg.Agents[0] != types.AgentCodex {
 		t.Fatalf("recovered provider = %s/%v, want codex/[codex]", cfg.Agent, cfg.Agents)
 	}
-	if cfg.RunModel != model || cfg.RunEffort != effort {
+	if cfg.RunModel != model || cfg.RunEffort != effort || !cfg.RunAdaptiveProfile {
 		t.Fatalf("recovered tuning = %q/%q, want %q/%q", cfg.RunModel, cfg.RunEffort, model, effort)
 	}
 }

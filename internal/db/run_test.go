@@ -38,7 +38,7 @@ func TestUpdateRunTuningRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.UpdateRunTuning(run.ID, "sonnet", "high"); err != nil {
+	if err := d.UpdateRunTuning(run.ID, "sonnet", "high", true); err != nil {
 		t.Fatal(err)
 	}
 	got, err := d.GetRun(run.ID)
@@ -47,6 +47,9 @@ func TestUpdateRunTuningRoundTrip(t *testing.T) {
 	}
 	if got.RequestedModel == nil || *got.RequestedModel != "sonnet" || got.RequestedEffort == nil || *got.RequestedEffort != "high" {
 		t.Fatalf("tuning did not round-trip: %#v", got)
+	}
+	if !got.AdaptiveProfile {
+		t.Fatal("adaptive profile mode did not round-trip")
 	}
 }
 

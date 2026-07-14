@@ -169,6 +169,8 @@ no-mistakes axi abort --run <id>
 ```
 
 Run-scoped `--model` and `--effort` choices require `--agent`, cover every agent-backed step and fix round, and never mutate shared configuration.
+Add `--adaptive-profile` when those values are a baseline and configured `purpose_profiles` should still tune individual duties.
+Without it, the explicit values stay locked for the complete run.
 AXI status records the requested choices, conflicting reattach attempts fail, and reruns inherit them unless replaced between runs.
 
 When an agent makes an additional fix after a gate round has already produced fix commits - a newly surfaced finding, a reviewer or pre-merge request, or any other post-completion change - it should commit the fix on top of the existing branch and run `no-mistakes axi run --intent "..."` with the original user intent.

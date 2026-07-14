@@ -229,6 +229,8 @@ Other stable purposes include `review`, `review-fix`, `test-evidence`, `test-fix
 Profiles are provider-specific, so a Claude fallback receives only its Claude profile and a Codex fallback receives only its Codex profile.
 They apply to fresh and resumed invocations.
 An explicit run-scoped `--model` or `--effort` wins over the corresponding profile field for the complete run, including daemon recovery.
+`--adaptive-profile` changes both values into a persisted baseline: exact-purpose profiles and the conservative mechanical fallback may then override them per invocation.
+The adaptive flag requires explicit agent, model, and effort values.
 Only Claude and Codex support purpose profiles.
 Valid effort values are `low`, `medium`, `high`, and `xhigh`; Claude additionally accepts `max`.
 
