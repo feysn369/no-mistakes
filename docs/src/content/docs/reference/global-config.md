@@ -32,6 +32,14 @@ agent_args_override:
     - -c
     - model_reasoning_effort="low"
 
+purpose_profiles:
+  codex:
+    review: {model: gpt-5.5, effort: medium}
+    mechanical: {model: gpt-5.5-codex, effort: low}
+  claude:
+    review: {model: sonnet, effort: medium}
+    mechanical: {model: haiku, effort: low}
+
 ci_timeout: "168h"
 
 step_quiet_warning: "10m"
@@ -201,7 +209,28 @@ agent_args_override:
     - google
 ```
 
-For Codex, `service_tier` and `model_reasoning_effort` tune different things: `service_tier` selects the speed or priority lane, while `model_reasoning_effort` selects reasoning depth. no-mistakes reloads global config while setting up each run, so edits made before `no-mistakes axi run` apply to that run. For repeatable profiles, use separately initialized `NM_HOME` directories; each has its own `config.yaml` and no-mistakes state.
+For Codex, `service_tier` and `model_reasoning_effort` tune different things: `service_tier` selects the speed or priority lane, while `model_reasoning_effort` selects reasoning depth.
+no-mistakes reloads global config while setting up each run, so edits made before `no-mistakes axi run` apply to that run.
+
+### purpose_profiles
+
+Provider-specific model and effort tuning for stable pipeline purposes.
+
+|         |                                          |
+| ------- | ---------------------------------------- |
+| Type    | `map[claude|codex]map[purpose]profile`   |
+| Default | Empty                                    |
+
+An exact purpose profile wins.
+The optional `mechanical` profile is the conservative fallback for `pr-draft` only.
+Lint, documentation, test, CI-fix, and conflict-resolution work never inherits that downgrade because those duties can require full engineering judgment; tune them only with an exact-purpose profile.
+Other stable purposes include `review`, `review-fix`, `test-evidence`, `test-fix`, `rebase-conflict`, `ci-fix`, `intent-disambiguate`, and `intent-summarize`.
+
+Profiles are provider-specific, so a Claude fallback receives only its Claude profile and a Codex fallback receives only its Codex profile.
+They apply to fresh and resumed invocations.
+An explicit run-scoped `--model` or `--effort` wins over the corresponding profile field for the complete run, including daemon recovery.
+Only Claude and Codex support purpose profiles.
+Valid effort values are `low`, `medium`, `high`, and `xhigh`; Claude additionally accepts `max`.
 
 ### ci_timeout
 

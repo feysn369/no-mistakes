@@ -7,3 +7,10 @@ type RunOverrides struct {
 	Model  string
 	Effort string
 }
+
+// PurposeProfile selects invocation-scoped model and effort tuning for one
+// stable pipeline purpose.
+type PurposeProfile struct {
+	Model  string `yaml:"model"`
+	Effort string `yaml:"effort"`
+}

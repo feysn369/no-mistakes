@@ -190,6 +190,7 @@ Rules:
 				reassessHistory,
 			),
 			CWD:        sctx.WorkDir,
+			Purpose:    "test-evidence",
 			JSONSchema: testFindingsSchema,
 			OnChunk:    sctx.LogChunk,
 		})
