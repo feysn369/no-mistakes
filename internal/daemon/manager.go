@@ -257,6 +257,7 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(str
 			return nil, fmt.Errorf("create agent %s: %w", name, err)
 		}
 		next = agent.WithPurposeProfiles(next, cfg.PurposeProfiles[name], cfg.RunModel != "", cfg.RunEffort != "")
+		next = agent.WithGateInstructions(next, cfg.Gate.Instructions)
 		created = append(created, agent.WithSteering(next))
 	}
 	ag := agent.NewFallback(created)
@@ -842,6 +843,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			// avoid mutating system state (e.g. brew/Homebrew touching
 			// /Applications), which triggers macOS App Management prompts.
 			next = agent.WithPurposeProfiles(next, cfg.PurposeProfiles[name], overrides.Model != "", overrides.Effort != "")
+			next = agent.WithGateInstructions(next, cfg.Gate.Instructions)
 			created = append(created, agent.WithSteering(next))
 		}
 		ag = agent.NewFallback(created)
