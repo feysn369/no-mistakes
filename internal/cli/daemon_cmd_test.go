@@ -106,21 +106,28 @@ func TestParseRunAgentRejectsUnsupportedAgent(t *testing.T) {
 }
 
 func TestRunTuningRequiresExplicitProvider(t *testing.T) {
-	if _, err := parseRunTuning("", "gpt-5.5", "medium"); err == nil {
+	if _, err := parseRunTuning("", "gpt-5.5", "medium", false); err == nil {
 		t.Fatal("provider-specific tuning without --agent should fail")
 	}
-	got, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "xhigh")
+	got, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "xhigh", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Model != "gpt-5.5" || got.Effort != "xhigh" {
 		t.Fatalf("unexpected tuning: %#v", got)
 	}
-	if _, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "max"); err == nil {
+	if _, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "max", false); err == nil {
 		t.Fatal("codex max effort should fail")
 	}
-	if _, err := parseRunTuning(types.AgentClaude, "opus", "max"); err != nil {
+	if _, err := parseRunTuning(types.AgentClaude, "opus", "max", false); err != nil {
 		t.Fatalf("claude max effort should pass: %v", err)
+	}
+	adaptive, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "medium", true)
+	if err != nil || !adaptive.AdaptiveProfile {
+		t.Fatalf("adaptive baseline rejected: %#v, %v", adaptive, err)
+	}
+	if _, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "", true); err == nil {
+		t.Fatal("incomplete adaptive baseline should be rejected")
 	}
 }
 
@@ -136,6 +143,13 @@ func TestModelAndEffortPushOptionsRoundTrip(t *testing.T) {
 	effort, err := parseStringPushOption(options, effortPushOptionPrefix, "effort")
 	if err != nil || effort != "high" {
 		t.Fatalf("effort = %q, err=%v", effort, err)
+	}
+	if hasPushOption(options, adaptiveProfilePushOption) {
+		t.Fatal("adaptive mode appeared without its push option")
+	}
+	options = append(options, adaptiveProfilePushOption)
+	if !hasPushOption(options, adaptiveProfilePushOption) {
+		t.Fatal("adaptive push option was not detected")
 	}
 }
 

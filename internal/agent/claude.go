@@ -71,7 +71,7 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	if opts.Session != nil {
 		resumeID = opts.Session.ID
 	}
-	args := a.buildArgs(opts.Prompt, opts.JSONSchema, resumeID)
+	args := a.buildArgsWithTuning(opts.Prompt, opts.JSONSchema, resumeID, opts.Model, opts.Effort)
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = opts.CWD
 	cmd.Stdin = nil
@@ -163,19 +163,32 @@ func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage To
 
 // buildArgs constructs the claude CLI arguments. User-supplied extraArgs
 // (from agent_args_override in the global config) are inserted ahead of the
-// managed flags, so user choices win over no-mistakes' defaults. If the user
+// managed flags. Managed run/invocation tuning replaces conflicting model or
+// effort flags so Claude receives each singleton option once. If the user
 // supplied their own permission mode, the default --dangerously-skip-permissions
 // is not added. A non-empty resumeID continues that session via --resume
 // (never --fork-session: the session identity must stay stable so later
 // turns keep resuming the same conversation).
 func (a *claudeAgent) buildArgs(prompt string, schema json.RawMessage, resumeID string) []string {
-	args := make([]string, 0, len(a.extraArgs)+12)
-	args = append(args, a.extraArgs...)
-	if a.model != "" {
-		args = append(args, "--model", a.model)
+	return a.buildArgsWithTuning(prompt, schema, resumeID, "", "")
+}
+
+func (a *claudeAgent) buildArgsWithTuning(prompt string, schema json.RawMessage, resumeID, invocationModel, invocationEffort string) []string {
+	model := a.model
+	if invocationModel != "" {
+		model = invocationModel
 	}
-	if a.effort != "" {
-		args = append(args, "--effort", a.effort)
+	effort := a.effort
+	if invocationEffort != "" {
+		effort = invocationEffort
+	}
+	args := make([]string, 0, len(a.extraArgs)+12)
+	args = append(args, withoutClaudeTuning(a.extraArgs, model != "", effort != "")...)
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--effort", effort)
 	}
 	args = append(args,
 		"-p", prompt,
@@ -205,6 +218,29 @@ func (a *claudeAgent) buildArgs(prompt string, schema json.RawMessage, resumeID 
 		args = append(args, "--dangerously-skip-permissions")
 	}
 	return args
+}
+
+func withoutClaudeTuning(args []string, stripModel, stripEffort bool) []string {
+	filtered := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if stripModel && (arg == "--model" || arg == "-m") {
+			i++
+			continue
+		}
+		if stripModel && (strings.HasPrefix(arg, "--model=") || strings.HasPrefix(arg, "-m=")) {
+			continue
+		}
+		if stripEffort && arg == "--effort" {
+			i++
+			continue
+		}
+		if stripEffort && strings.HasPrefix(arg, "--effort=") {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
 }
 
 // claudeUserSetSettingSources reports whether extraArgs pin --setting-sources at

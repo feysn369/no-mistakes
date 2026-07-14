@@ -223,6 +223,7 @@ func applyRecoveredRunAgent(cfg *config.Config, run *db.Run) {
 	if run.RequestedEffort != nil {
 		cfg.RunEffort = *run.RequestedEffort
 	}
+	cfg.RunAdaptiveProfile = run.AdaptiveProfile
 	if run.RequestedAgent == nil || run.ResolvedAgent == nil {
 		return
 	}
@@ -256,6 +257,7 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(str
 			}
 			return nil, fmt.Errorf("create agent %s: %w", name, err)
 		}
+		next = agent.WithPurposeProfiles(next, cfg.PurposeProfiles[name], cfg.RunModel != "" && !cfg.RunAdaptiveProfile, cfg.RunEffort != "" && !cfg.RunAdaptiveProfile)
 		created = append(created, agent.WithSteering(next))
 	}
 	ag := agent.NewFallback(created)
@@ -558,7 +560,7 @@ func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushRec
 	}
 
 	branch := branchFromRef(params.Ref)
-	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent, types.RunOverrides{Agent: params.Agent, Model: params.Model, Effort: params.Effort})
+	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent, types.RunOverrides{Agent: params.Agent, Model: params.Model, Effort: params.Effort, AdaptiveProfile: params.AdaptiveProfile})
 }
 
 // HandleRerun creates a new run for the latest gate head on a branch. An
@@ -614,6 +616,7 @@ func inheritRunOverrides(overrides types.RunOverrides, previous *db.Run) types.R
 	if previous == nil {
 		return overrides
 	}
+	callerSpecifiedProfile := overrides.Agent != "" || overrides.Model != "" || overrides.Effort != "" || overrides.AdaptiveProfile
 	previousAgent := types.AgentName("")
 	if previous.RequestedAgent != nil {
 		previousAgent = types.AgentName(*previous.RequestedAgent)
@@ -630,6 +633,9 @@ func inheritRunOverrides(overrides types.RunOverrides, previous *db.Run) types.R
 		}
 		if overrides.Effort == "" && previous.RequestedEffort != nil {
 			overrides.Effort = *previous.RequestedEffort
+		}
+		if !callerSpecifiedProfile && previous.AdaptiveProfile {
+			overrides.AdaptiveProfile = true
 		}
 	}
 	return overrides
@@ -655,6 +661,10 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 	if (overrides.Model != "" || overrides.Effort != "") && overrides.Agent == "" {
 		trackStartFailure("validate_tuning")
 		return "", fmt.Errorf("run model/effort require an explicit run agent")
+	}
+	if overrides.AdaptiveProfile && (overrides.Agent == "" || overrides.Model == "" || overrides.Effort == "") {
+		trackStartFailure("validate_adaptive_profile")
+		return "", fmt.Errorf("adaptive profile requires an explicit run agent, model, and effort")
 	}
 
 	if m.shuttingDown.Load() {
@@ -803,7 +813,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		if err := m.db.UpdateRunAgents(run.ID, string(overrides.Agent), string(cfg.Agent)); err != nil {
 			return "", err
 		}
-		if err := m.db.UpdateRunTuning(run.ID, overrides.Model, overrides.Effort); err != nil {
+		if err := m.db.UpdateRunTuning(run.ID, overrides.Model, overrides.Effort, overrides.AdaptiveProfile); err != nil {
 			return "", err
 		}
 		resolved := string(cfg.Agent)
@@ -820,6 +830,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			effort := overrides.Effort
 			run.RequestedEffort = &effort
 		}
+		run.AdaptiveProfile = overrides.AdaptiveProfile
 		agents := cfg.Agents
 		if len(agents) == 0 {
 			agents = []types.AgentName{cfg.Agent}
@@ -840,6 +851,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			// Steer every pipeline agent to keep writes inside the worktree and
 			// avoid mutating system state (e.g. brew/Homebrew touching
 			// /Applications), which triggers macOS App Management prompts.
+			next = agent.WithPurposeProfiles(next, cfg.PurposeProfiles[name], overrides.Model != "" && !overrides.AdaptiveProfile, overrides.Effort != "" && !overrides.AdaptiveProfile)
 			created = append(created, agent.WithSteering(next))
 		}
 		ag = agent.NewFallback(created)
@@ -875,6 +887,9 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 	}
 	if overrides.Effort != "" {
 		startedFields["requested_effort"] = overrides.Effort
+	}
+	if overrides.AdaptiveProfile {
+		startedFields["profile_mode"] = "adaptive"
 	}
 	telemetry.Track("run", startedFields)
 

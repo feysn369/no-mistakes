@@ -36,14 +36,35 @@ func TestCodexAgent_BuildArgs(t *testing.T) {
 func TestCodexAgent_RunTuningOverridesGlobalArgs(t *testing.T) {
 	a := &codexAgent{
 		bin:       "codex",
-		extraArgs: []string{"--model", "old", "--config", `model_reasoning_effort="low"`},
+		extraArgs: []string{"--model", "old", "--config", `model_reasoning_effort="low"`, "--config", `service_tier="priority"`},
 		model:     "gpt-5.5",
 		effort:    "xhigh",
 	}
 	args := a.buildArgs("review", "", "")
 	joined := strings.Join(args, "\x00")
-	if !strings.Contains(joined, "--model\x00old\x00--config\x00model_reasoning_effort=\"low\"\x00--model\x00gpt-5.5\x00--config\x00model_reasoning_effort=\"xhigh\"") {
-		t.Fatalf("run tuning must follow global args so it wins: %v", args)
+	if !strings.Contains(joined, "--model\x00gpt-5.5\x00--config\x00model_reasoning_effort=\"xhigh\"") || strings.Contains(joined, "\x00old\x00") {
+		t.Fatalf("run tuning must replace conflicting global args: %v", args)
+	}
+	if !strings.Contains(joined, "--config\x00service_tier=\"priority\"") {
+		t.Fatalf("unrelated global config was removed: %v", args)
+	}
+	if strings.Count(joined, "--model") != 1 || strings.Count(joined, "model_reasoning_effort=") != 1 {
+		t.Fatalf("Codex tuning flags must be unique: %v", args)
+	}
+}
+
+func TestCodexAgent_InvocationTuningWorksOnResume(t *testing.T) {
+	ca := &codexAgent{bin: "codex", model: "run-default", effort: "medium"}
+	args := ca.buildArgsWithTuning("prompt", "", "thread-1", "gpt-5.5-codex", "low")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--model\x00gpt-5.5-codex\x00--config\x00model_reasoning_effort=\"low\"") || strings.Contains(joined, "\x00run-default\x00") || strings.Contains(joined, "model_reasoning_effort=\"medium\"") {
+		t.Fatalf("invocation tuning must replace run defaults: %v", args)
+	}
+	if strings.Count(joined, "--model") != 1 || strings.Count(joined, "model_reasoning_effort=") != 1 {
+		t.Fatalf("Codex invocation tuning flags must be unique: %v", args)
+	}
+	if !strings.Contains(joined, "resume\x00") || !strings.Contains(joined, "thread-1") {
+		t.Fatalf("resume arguments lost: %v", args)
 	}
 }
 

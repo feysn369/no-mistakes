@@ -99,6 +99,7 @@ type runView struct {
 	ResolvedAgent   string
 	RequestedModel  string
 	RequestedEffort string
+	AdaptiveProfile bool
 	// AwaitingAgentSince is the unix-seconds time the run parked at a gate
 	// awaiting the driving agent, or nil when the run is not parked. It powers
 	// the top-level parked signal in the run object.
@@ -117,6 +118,7 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 		ResolvedAgent:      stringValue(r.ResolvedAgent),
 		RequestedModel:     stringValue(r.RequestedModel),
 		RequestedEffort:    stringValue(r.RequestedEffort),
+		AdaptiveProfile:    r.AdaptiveProfile,
 	}
 	if r.PRURL != nil {
 		rv.PRURL = *r.PRURL
@@ -160,6 +162,7 @@ func runViewFromDB(r *db.Run, steps []*db.StepResult) runView {
 		ResolvedAgent:      stringValue(r.ResolvedAgent),
 		RequestedModel:     stringValue(r.RequestedModel),
 		RequestedEffort:    stringValue(r.RequestedEffort),
+		AdaptiveProfile:    r.AdaptiveProfile,
 	}
 	if r.PRURL != nil {
 		rv.PRURL = *r.PRURL
@@ -432,6 +435,9 @@ func runObjectFieldWithKey(key string, rv runView) toon.Field {
 	}
 	if rv.RequestedEffort != "configured default" {
 		fields = append(fields, toon.Field{Key: "effort", Value: rv.RequestedEffort})
+	}
+	if rv.AdaptiveProfile {
+		fields = append(fields, toon.Field{Key: "profile_mode", Value: "adaptive"})
 	}
 	if rv.PRURL != "" {
 		fields = append(fields, toon.Field{Key: "pr", Value: rv.PRURL})

@@ -22,8 +22,12 @@ type Agent interface {
 
 // RunOpts configures a single agent invocation.
 type RunOpts struct {
-	Prompt      string
-	CWD         string
+	Prompt string
+	CWD    string
+	// Model and Effort are invocation-scoped native-adapter tuning. Empty values
+	// inherit the run-level/configured adapter defaults.
+	Model       string
+	Effort      string
 	JSONSchema  json.RawMessage      // structured output schema (optional)
 	OnChunk     func(text string)    // streaming text callback (optional)
 	OnLifecycle func(LifecycleEvent) // native agent lifecycle callback (optional)
