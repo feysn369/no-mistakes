@@ -34,6 +34,38 @@ func TestClaudeAgent_BuildArgs(t *testing.T) {
 	}
 }
 
+func TestClaudeAgent_RunTuningOverridesGlobalArgs(t *testing.T) {
+	a := &claudeAgent{
+		bin:       "claude",
+		extraArgs: []string{"--model", "old", "--effort", "low"},
+		model:     "sonnet",
+		effort:    "high",
+	}
+	args := a.buildArgs("review", nil, "")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--model\x00sonnet\x00--effort\x00high") || strings.Contains(joined, "\x00old\x00") {
+		t.Fatalf("run tuning must replace conflicting global args: %v", args)
+	}
+	if strings.Count(joined, "--model") != 1 || strings.Count(joined, "--effort") != 1 {
+		t.Fatalf("Claude tuning flags must be unique: %v", args)
+	}
+}
+
+func TestClaudeAgent_InvocationTuningWorksOnResume(t *testing.T) {
+	ca := &claudeAgent{bin: "claude", model: "sonnet", effort: "medium"}
+	args := ca.buildArgsWithTuning("prompt", nil, "session-1", "haiku", "low")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--model\x00haiku\x00--effort\x00low") || strings.Contains(joined, "\x00sonnet\x00") || strings.Contains(joined, "\x00medium\x00") {
+		t.Fatalf("invocation tuning must replace run defaults: %v", args)
+	}
+	if strings.Count(joined, "--model") != 1 || strings.Count(joined, "--effort") != 1 {
+		t.Fatalf("Claude invocation tuning flags must be unique: %v", args)
+	}
+	if !strings.Contains(joined, "--resume\x00session-1") {
+		t.Fatalf("resume arguments lost: %v", args)
+	}
+}
+
 func TestClaudeAgent_BuildArgs_NoSchema(t *testing.T) {
 	ca := &claudeAgent{bin: "claude"}
 	args := ca.buildArgs("prompt", nil, "")

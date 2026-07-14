@@ -11,12 +11,24 @@ import (
 )
 
 func newRerunCmd() *cobra.Command {
-	return &cobra.Command{
+	var agentValue string
+	var modelValue string
+	var effortValue string
+	var adaptiveProfile bool
+	cmd := &cobra.Command{
 		Use:   "rerun",
 		Short: "Rerun the pipeline for the current branch",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return trackCommand("rerun", func() error {
+				agentName, err := parseRunAgent(agentValue)
+				if err != nil {
+					return err
+				}
+				overrides, err := parseRunTuning(agentName, modelValue, effortValue, adaptiveProfile)
+				if err != nil {
+					return err
+				}
 				p, d, err := openResources()
 				if err != nil {
 					return err
@@ -47,7 +59,7 @@ func newRerunCmd() *cobra.Command {
 				defer client.Close()
 
 				var result ipc.RerunResult
-				if err := client.Call(ipc.MethodRerun, &ipc.RerunParams{RepoID: repo.ID, Branch: branch}, &result); err != nil {
+				if err := client.Call(ipc.MethodRerun, &ipc.RerunParams{RepoID: repo.ID, Branch: branch, Agent: overrides.Agent, Model: overrides.Model, Effort: overrides.Effort, AdaptiveProfile: overrides.AdaptiveProfile}, &result); err != nil {
 					return fmt.Errorf("rerun pipeline: %w", err)
 				}
 
@@ -56,4 +68,9 @@ func newRerunCmd() *cobra.Command {
 			})
 		},
 	}
+	cmd.Flags().StringVar(&agentValue, "agent", "", "pipeline agent for this rerun only (claude or codex); defaults to the previous run's explicit selection")
+	cmd.Flags().StringVar(&modelValue, "model", "", "model for this rerun only (requires --agent); defaults to the previous run's explicit selection")
+	cmd.Flags().StringVar(&effortValue, "effort", "", "reasoning effort for this rerun only (requires --agent); defaults to the previous run's explicit selection")
+	cmd.Flags().BoolVar(&adaptiveProfile, "adaptive-profile", false, "treat model/effort as a baseline and allow configured purpose profiles to override them")
+	return cmd
 }

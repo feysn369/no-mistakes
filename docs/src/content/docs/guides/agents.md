@@ -160,12 +160,18 @@ Agents can also call `no-mistakes axi` directly:
 
 ```sh
 no-mistakes axi run --intent "the user's goal"
+no-mistakes axi run --intent "the user's goal" --agent codex --model gpt-5.5 --effort medium
 no-mistakes axi status
 no-mistakes axi respond --action approve
 no-mistakes axi logs --step review --full
 no-mistakes axi abort
 no-mistakes axi abort --run <id>
 ```
+
+Run-scoped `--model` and `--effort` choices require `--agent`, cover every agent-backed step and fix round, and never mutate shared configuration.
+Add `--adaptive-profile` when those values are a baseline and configured `purpose_profiles` should still tune individual duties.
+Without it, the explicit values stay locked for the complete run.
+AXI status records the requested choices, conflicting reattach attempts fail, and reruns inherit them unless replaced between runs.
 
 When an agent makes an additional fix after a gate round has already produced fix commits - a newly surfaced finding, a reviewer or pre-merge request, or any other post-completion change - it should commit the fix on top of the existing branch and run `no-mistakes axi run --intent "..."` with the original user intent.
 Never abort-and-restart, reset the branch, or open a new branch in a way that drops prior gate-fix commits, including the pipeline's own `no-mistakes(review|document|lint): ...` commits.
@@ -180,10 +186,11 @@ The [CLI reference](/no-mistakes/reference/cli/) documents each `axi` command an
 When the daemon is running through a managed service, its `PATH` comes from your login shell environment on macOS and Linux plus common user, Homebrew, and system binary directories; on Windows it reuses the current process environment.
 If native agent discovery does not resolve the binary you expect, check `~/.no-mistakes/logs/daemon.log` and set an explicit override; [Environment the daemon sees](/no-mistakes/reference/environment/#environment-the-daemon-sees) owns the full resolution story.
 
-Three global config fields tune resolution and invocation, and the [Global Config Reference](/no-mistakes/reference/global-config/) owns each one:
+Four global config fields tune resolution and invocation, and the [Global Config Reference](/no-mistakes/reference/global-config/) owns each one:
 
 - [`agent_path_override`](/no-mistakes/reference/global-config/#agent_path_override) - custom binary paths per native agent, plus the default binary-name table ([`acpx_path`](/no-mistakes/reference/global-config/#acpx_path) is the ACP equivalent).
 - [`agent_args_override`](/no-mistakes/reference/global-config/#agent_args_override) - extra CLI flags per native agent for model selection, service tier, reasoning depth, or permission mode, including the reserved-flag rules and smart defaults. Keep it global-only; it reflects your local agent setup rather than repo policy.
+- [`purpose_profiles`](/no-mistakes/reference/global-config/#purpose_profiles) - provider-specific model and effort choices for review and mechanical pipeline duties; explicit run overrides win.
 - [`agent`](/no-mistakes/reference/global-config/#agent) - the `auto` resolution order and ordered fallback-list semantics.
 
 ## Review session reuse
@@ -199,6 +206,7 @@ All agents implement the same interface. Each invocation receives:
 - **CWD** - the worktree directory
 - **Environment** - the daemon environment plus non-interactive Git overrides (`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true`, and `GIT_TERMINAL_PROMPT=0`) so agent-invoked Git commands do not hang on editors or credential prompts
 - **JSONSchema** - optional structured output schema for typed responses
+- **Purpose** - a stable pipeline duty used for optional provider-specific model and effort profiles
 - **OnChunk** - callback for streaming text output to the TUI
 - **OnLifecycle** - callback for native subprocess start, exit, and retry activity that is recorded in step logs and AXI active-step status
 - **Session** - optional no-mistakes-owned native session identity for review-loop reuse

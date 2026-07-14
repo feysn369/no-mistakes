@@ -208,7 +208,28 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 	}
 	trustedRepoCfg := loadTrustedRepoConfig(ctx, workDir, trustedSHA, run.ID)
 	allowRepoCommands := trustedRepoCfg != nil && trustedRepoCfg.AllowRepoCommands
-	return config.Merge(globalCfg, config.EffectiveRepoConfig(repoCfg, trustedRepoCfg, allowRepoCommands)), nil
+	cfg := config.Merge(globalCfg, config.EffectiveRepoConfig(repoCfg, trustedRepoCfg, allowRepoCommands))
+	applyRecoveredRunAgent(cfg, run)
+	return cfg, nil
+}
+
+// applyRecoveredRunAgent keeps an explicit run-scoped selection stable across
+// daemon restarts. Repository/global config may have changed since the run
+// started, but recovery must resume the adapter recorded for that run.
+func applyRecoveredRunAgent(cfg *config.Config, run *db.Run) {
+	if run.RequestedModel != nil {
+		cfg.RunModel = *run.RequestedModel
+	}
+	if run.RequestedEffort != nil {
+		cfg.RunEffort = *run.RequestedEffort
+	}
+	cfg.RunAdaptiveProfile = run.AdaptiveProfile
+	if run.RequestedAgent == nil || run.ResolvedAgent == nil {
+		return
+	}
+	resolved := types.AgentName(*run.ResolvedAgent)
+	cfg.Agent = resolved
+	cfg.Agents = []types.AgentName{resolved}
 }
 
 func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(string) (string, error)) (agent.Agent, error) {
@@ -226,6 +247,8 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(str
 	for _, name := range agents {
 		next, err := agent.NewWithOptions(name, cfg.AgentPathFor(name), cfg.AgentArgsFor(name), agent.Options{
 			ACPRegistryOverrides:   cfg.ACPRegistryOverrides,
+			Model:                  cfg.RunModel,
+			Effort:                 cfg.RunEffort,
 			DisableProjectSettings: cfg.DisableProjectSettings,
 		})
 		if err != nil {
@@ -234,6 +257,8 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(str
 			}
 			return nil, fmt.Errorf("create agent %s: %w", name, err)
 		}
+		next = agent.WithPurposeProfiles(next, cfg.PurposeProfiles[name], cfg.RunModel != "" && !cfg.RunAdaptiveProfile, cfg.RunEffort != "" && !cfg.RunAdaptiveProfile)
+		next = agent.WithGateInstructions(next, cfg.Gate.Instructions)
 		created = append(created, agent.WithSteering(next))
 	}
 	ag := agent.NewFallback(created)
@@ -536,12 +561,12 @@ func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushRec
 	}
 
 	branch := branchFromRef(params.Ref)
-	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent)
+	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent, types.RunOverrides{Agent: params.Agent, Model: params.Model, Effort: params.Effort, AdaptiveProfile: params.AdaptiveProfile})
 }
 
 // HandleRerun creates a new run for the latest gate head on a branch. An
 // optional intent is stamped onto the new run.
-func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch string, skipSteps []types.StepName, intent string) (string, error) {
+func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch string, skipSteps []types.StepName, intent string, overrides types.RunOverrides) (string, error) {
 	repo, err := m.db.GetRepo(repoID)
 	if err != nil {
 		return "", fmt.Errorf("get repo: %w", err)
@@ -584,13 +609,43 @@ func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch string, ski
 		baseSHA = matchingHead.BaseSHA
 	}
 
-	return m.startRun(ctx, repo, branch, headSHA, baseSHA, "rerun", skipSteps, intent)
+	overrides = inheritRunOverrides(overrides, latestForBranch)
+	return m.startRun(ctx, repo, branch, headSHA, baseSHA, "rerun", skipSteps, intent, overrides)
+}
+
+func inheritRunOverrides(overrides types.RunOverrides, previous *db.Run) types.RunOverrides {
+	if previous == nil {
+		return overrides
+	}
+	callerSpecifiedProfile := overrides.Agent != "" || overrides.Model != "" || overrides.Effort != "" || overrides.AdaptiveProfile
+	previousAgent := types.AgentName("")
+	if previous.RequestedAgent != nil {
+		previousAgent = types.AgentName(*previous.RequestedAgent)
+	}
+	if overrides.Agent == "" {
+		overrides.Agent = previousAgent
+	}
+	// Model names are provider-specific. Inherit tuning only while keeping the
+	// same explicit provider; switching providers starts from that provider's
+	// configured defaults unless the caller supplies replacement tuning.
+	if overrides.Agent == previousAgent {
+		if overrides.Model == "" && previous.RequestedModel != nil {
+			overrides.Model = *previous.RequestedModel
+		}
+		if overrides.Effort == "" && previous.RequestedEffort != nil {
+			overrides.Effort = *previous.RequestedEffort
+		}
+		if !callerSpecifiedProfile && previous.AdaptiveProfile {
+			overrides.AdaptiveProfile = true
+		}
+	}
+	return overrides
 }
 
 // startRun creates a run, sets up a worktree, and launches pipeline execution.
 // A non-empty intent is stamped onto the run as agent-supplied, so the intent
 // step uses it instead of inferring from transcripts.
-func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent string) (string, error) {
+func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent string, overrides types.RunOverrides) (string, error) {
 	branchRole := telemetryBranchRole(branch, repo.DefaultBranch)
 	trackStartFailure := func(stage string) {
 		telemetry.Track("run", telemetry.Fields{
@@ -599,6 +654,18 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			"branch_role": branchRole,
 			"stage":       stage,
 		})
+	}
+	if overrides.Agent != "" && overrides.Agent != types.AgentClaude && overrides.Agent != types.AgentCodex {
+		trackStartFailure("validate_agent")
+		return "", fmt.Errorf("unsupported run agent %q (valid: claude, codex)", overrides.Agent)
+	}
+	if (overrides.Model != "" || overrides.Effort != "") && overrides.Agent == "" {
+		trackStartFailure("validate_tuning")
+		return "", fmt.Errorf("run model/effort require an explicit run agent")
+	}
+	if overrides.AdaptiveProfile && (overrides.Agent == "" || overrides.Model == "" || overrides.Effort == "") {
+		trackStartFailure("validate_adaptive_profile")
+		return "", fmt.Errorf("adaptive profile requires an explicit run agent, model, and effort")
 	}
 
 	if m.shuttingDown.Load() {
@@ -729,6 +796,10 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		slog.Info("repo commands/agent loaded from default branch, not pushed branch", "run_id", run.ID, "branch", branch, "default_branch", repo.DefaultBranch)
 	}
 	cfg := config.Merge(globalCfg, effectiveRepoCfg)
+	if overrides.Agent != "" {
+		cfg.Agent = overrides.Agent
+		cfg.Agents = []types.AgentName{overrides.Agent}
+	}
 
 	// Create agent. In demo mode, skip resolution and use a no-op agent.
 	var ag agent.Agent
@@ -740,6 +811,27 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			trackStartFailure("resolve_agent")
 			return "", err
 		}
+		if err := m.db.UpdateRunAgents(run.ID, string(overrides.Agent), string(cfg.Agent)); err != nil {
+			return "", err
+		}
+		if err := m.db.UpdateRunTuning(run.ID, overrides.Model, overrides.Effort, overrides.AdaptiveProfile); err != nil {
+			return "", err
+		}
+		resolved := string(cfg.Agent)
+		run.ResolvedAgent = &resolved
+		if overrides.Agent != "" {
+			requested := string(overrides.Agent)
+			run.RequestedAgent = &requested
+		}
+		if overrides.Model != "" {
+			model := overrides.Model
+			run.RequestedModel = &model
+		}
+		if overrides.Effort != "" {
+			effort := overrides.Effort
+			run.RequestedEffort = &effort
+		}
+		run.AdaptiveProfile = overrides.AdaptiveProfile
 		agents := cfg.Agents
 		if len(agents) == 0 {
 			agents = []types.AgentName{cfg.Agent}
@@ -748,6 +840,8 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		for _, name := range agents {
 			next, agErr := agent.NewWithOptions(name, cfg.AgentPathFor(name), cfg.AgentArgsFor(name), agent.Options{
 				ACPRegistryOverrides:   cfg.ACPRegistryOverrides,
+				Model:                  overrides.Model,
+				Effort:                 overrides.Effort,
 				DisableProjectSettings: cfg.DisableProjectSettings,
 			})
 			if agErr != nil {
@@ -758,6 +852,8 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			// Steer every pipeline agent to keep writes inside the worktree and
 			// avoid mutating system state (e.g. brew/Homebrew touching
 			// /Applications), which triggers macOS App Management prompts.
+			next = agent.WithPurposeProfiles(next, cfg.PurposeProfiles[name], overrides.Model != "" && !overrides.AdaptiveProfile, overrides.Effort != "" && !overrides.AdaptiveProfile)
+			next = agent.WithGateInstructions(next, cfg.Gate.Instructions)
 			created = append(created, agent.WithSteering(next))
 		}
 		ag = agent.NewFallback(created)
@@ -776,14 +872,28 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 	}
 
 	execSteps := m.steps()
-	telemetry.Track("run", telemetry.Fields{
-		"action":      "started",
-		"trigger":     trigger,
-		"agent":       string(cfg.Agent),
-		"branch_role": branchRole,
-		"step_count":  len(execSteps),
-		"demo_mode":   steps.IsDemoMode(),
-	})
+	startedFields := telemetry.Fields{
+		"action":         "started",
+		"trigger":        trigger,
+		"agent":          string(cfg.Agent),
+		"resolved_agent": string(cfg.Agent),
+		"branch_role":    branchRole,
+		"step_count":     len(execSteps),
+		"demo_mode":      steps.IsDemoMode(),
+	}
+	if overrides.Agent != "" {
+		startedFields["requested_agent"] = string(overrides.Agent)
+	}
+	if overrides.Model != "" {
+		startedFields["requested_model"] = overrides.Model
+	}
+	if overrides.Effort != "" {
+		startedFields["requested_effort"] = overrides.Effort
+	}
+	if overrides.AdaptiveProfile {
+		startedFields["profile_mode"] = "adaptive"
+	}
+	telemetry.Track("run", startedFields)
 
 	// Create executor with event broadcast.
 	runCtx, cancel := context.WithCancelCause(context.Background())

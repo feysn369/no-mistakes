@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS runs (
     error                TEXT,
     awaiting_agent_since INTEGER,
     parked_ms            INTEGER,
+    requested_agent       TEXT,
+    resolved_agent        TEXT,
+    requested_model       TEXT,
+    requested_effort      TEXT,
+	adaptive_profile      INTEGER NOT NULL DEFAULT 0,
     created_at           INTEGER NOT NULL,
     updated_at           INTEGER NOT NULL
 );
@@ -135,6 +140,11 @@ var migrationStatements = []string{
 	`ALTER TABLE runs ADD COLUMN intent_score REAL`,
 	`ALTER TABLE runs ADD COLUMN awaiting_agent_since INTEGER`,
 	`ALTER TABLE runs ADD COLUMN parked_ms INTEGER`,
+	`ALTER TABLE runs ADD COLUMN requested_agent TEXT`,
+	`ALTER TABLE runs ADD COLUMN resolved_agent TEXT`,
+	`ALTER TABLE runs ADD COLUMN requested_model TEXT`,
+	`ALTER TABLE runs ADD COLUMN requested_effort TEXT`,
+	`ALTER TABLE runs ADD COLUMN adaptive_profile INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE step_results ADD COLUMN last_activity_at INTEGER`,
 	`ALTER TABLE step_results ADD COLUMN last_activity TEXT`,
 	`ALTER TABLE step_results ADD COLUMN agent_pid INTEGER`,

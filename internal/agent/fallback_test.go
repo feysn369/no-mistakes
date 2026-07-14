@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 type fallbackTestAgent struct {
@@ -12,13 +14,55 @@ type fallbackTestAgent struct {
 	run       func() (*Result, error)
 	calls     int
 	resumable bool
+	lastOpts  RunOpts
 }
 
 func (a *fallbackTestAgent) Name() string { return a.name }
 
-func (a *fallbackTestAgent) Run(context.Context, RunOpts) (*Result, error) {
+func (a *fallbackTestAgent) Run(_ context.Context, opts RunOpts) (*Result, error) {
 	a.calls++
+	a.lastOpts = opts
 	return a.run()
+}
+
+func TestFallbackAgentUsesEachProvidersPurposeProfile(t *testing.T) {
+	first := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
+		return nil, errors.New(`codex start: executable not found`)
+	}}
+	second := &fallbackTestAgent{name: "claude", run: func() (*Result, error) {
+		return &Result{Text: "ok"}, nil
+	}}
+	ag := NewFallback([]Agent{
+		WithPurposeProfiles(first, map[string]types.PurposeProfile{"review": {Model: "gpt-5.5"}}, false, false),
+		WithPurposeProfiles(second, map[string]types.PurposeProfile{"review": {Model: "sonnet"}}, false, false),
+	})
+	if _, err := ag.Run(context.Background(), RunOpts{Purpose: "review"}); err != nil {
+		t.Fatal(err)
+	}
+	if first.lastOpts.Model != "gpt-5.5" || second.lastOpts.Model != "sonnet" {
+		t.Fatalf("provider profiles = codex %q, claude %q", first.lastOpts.Model, second.lastOpts.Model)
+	}
+}
+
+func TestFallbackAgentCarriesGateInstructionsToEveryProvider(t *testing.T) {
+	first := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
+		return nil, errors.New(`codex start: executable not found`)
+	}}
+	second := &fallbackTestAgent{name: "claude", run: func() (*Result, error) {
+		return &Result{Text: "ok"}, nil
+	}}
+	wrapped := NewFallback([]Agent{
+		WithGateInstructions(first, "compact invariant"),
+		WithGateInstructions(second, "compact invariant"),
+	})
+	if _, err := wrapped.Run(context.Background(), RunOpts{Prompt: "review"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*fallbackTestAgent{first, second} {
+		if !strings.Contains(a.lastOpts.Prompt, "compact invariant") || !strings.HasSuffix(a.lastOpts.Prompt, "review") {
+			t.Fatalf("%s prompt missing instructions or payload: %q", a.name, a.lastOpts.Prompt)
+		}
+	}
 }
 
 func (a *fallbackTestAgent) Close() error { return nil }
