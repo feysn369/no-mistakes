@@ -60,6 +60,22 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			agentName, err := parseAgentPushOptions(pushOptions)
+			if err != nil {
+				return err
+			}
+			model, err := parseStringPushOption(pushOptions, modelPushOptionPrefix, "model")
+			if err != nil {
+				return err
+			}
+			effort, err := parseStringPushOption(pushOptions, effortPushOptionPrefix, "effort")
+			if err != nil {
+				return err
+			}
+			adaptiveProfile := hasPushOption(pushOptions, adaptiveProfilePushOption)
+			if _, err := parseRunTuning(agentName, model, effort, adaptiveProfile); err != nil {
+				return err
+			}
 			gatePath, err := normalizeNotifyGatePath(gate)
 			if err != nil {
 				return err
@@ -78,12 +94,16 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 
 			var result ipc.PushReceivedResult
 			return client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
-				Gate:      gatePath,
-				Ref:       ref,
-				Old:       oldSHA,
-				New:       newSHA,
-				SkipSteps: skipSteps,
-				Intent:    intent,
+				Gate:            gatePath,
+				Ref:             ref,
+				Old:             oldSHA,
+				New:             newSHA,
+				SkipSteps:       skipSteps,
+				Intent:          intent,
+				Agent:           agentName,
+				Model:           model,
+				Effort:          effort,
+				AdaptiveProfile: adaptiveProfile,
 			}, &result)
 		},
 	}
@@ -99,6 +119,99 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("new")
 
 	return cmd
+}
+
+const agentPushOptionPrefix = "no-mistakes.agent="
+const modelPushOptionPrefix = "no-mistakes.model="
+const effortPushOptionPrefix = "no-mistakes.effort="
+const adaptiveProfilePushOption = "no-mistakes.adaptive-profile"
+
+func parseRunAgent(value string) (types.AgentName, error) {
+	name := types.AgentName(strings.TrimSpace(value))
+	if name == "" || name == types.AgentClaude || name == types.AgentCodex {
+		return name, nil
+	}
+	return "", fmt.Errorf("unsupported run agent %q (valid: claude, codex)", value)
+}
+
+func parseRunTuning(agentName types.AgentName, model, effort string, adaptiveProfile bool) (types.RunOverrides, error) {
+	model = strings.TrimSpace(model)
+	effort = strings.TrimSpace(effort)
+	if (model != "" || effort != "") && agentName == "" {
+		return types.RunOverrides{}, fmt.Errorf("--model/--effort require --agent because model names and effort support are provider-specific")
+	}
+	if adaptiveProfile && (agentName == "" || model == "" || effort == "") {
+		return types.RunOverrides{}, fmt.Errorf("--adaptive-profile requires --agent, --model, and --effort")
+	}
+	if model != "" {
+		if len(model) > 128 || strings.ContainsAny(model, " \t\r\n") {
+			return types.RunOverrides{}, fmt.Errorf("invalid run model %q", model)
+		}
+	}
+	if effort != "" {
+		valid := effort == "low" || effort == "medium" || effort == "high" || effort == "xhigh" || (agentName == types.AgentClaude && effort == "max")
+		if !valid {
+			return types.RunOverrides{}, fmt.Errorf("unsupported effort %q for %s (valid: low, medium, high, xhigh%s)", effort, agentName, map[bool]string{true: ", max"}[agentName == types.AgentClaude])
+		}
+	}
+	return types.RunOverrides{Agent: agentName, Model: model, Effort: effort, AdaptiveProfile: adaptiveProfile}, nil
+}
+
+func hasPushOption(options []string, wanted string) bool {
+	for _, option := range options {
+		if option == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func formatAgentPushOption(name types.AgentName) string {
+	if name == "" {
+		return ""
+	}
+	return agentPushOptionPrefix + string(name)
+}
+
+func parseAgentPushOptions(options []string) (types.AgentName, error) {
+	var selected types.AgentName
+	for _, option := range options {
+		value, ok := strings.CutPrefix(option, agentPushOptionPrefix)
+		if !ok {
+			continue
+		}
+		name, err := parseRunAgent(value)
+		if err != nil {
+			return "", err
+		}
+		if selected != "" && selected != name {
+			return "", fmt.Errorf("conflicting run agents %q and %q", selected, name)
+		}
+		selected = name
+	}
+	return selected, nil
+}
+
+func parseStringPushOption(options []string, prefix, label string) (string, error) {
+	selected := ""
+	for _, option := range options {
+		value, ok := strings.CutPrefix(option, prefix)
+		if !ok {
+			continue
+		}
+		if selected != "" && selected != value {
+			return "", fmt.Errorf("conflicting run %ss %q and %q", label, selected, value)
+		}
+		selected = value
+	}
+	return selected, nil
+}
+
+func formatStringPushOption(prefix, value string) string {
+	if value == "" {
+		return ""
+	}
+	return prefix + value
 }
 
 func normalizeNotifyGatePath(gate string) (string, error) {

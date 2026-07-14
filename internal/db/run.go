@@ -46,6 +46,11 @@ type Run struct {
 	// milliseconds across every gate wait (local performance telemetry;
 	// step duration_ms values exclude this time).
 	ParkedMS        int64
+	RequestedAgent  *string
+	ResolvedAgent   *string
+	RequestedModel  *string
+	RequestedEffort *string
+	AdaptiveProfile bool
 	Intent          *string
 	IntentSource    *string
 	IntentSessionID *string
@@ -54,7 +59,7 @@ type Run struct {
 	UpdatedAt       int64
 }
 
-const runColumns = `id, repo_id, branch, head_sha, base_sha, submitted_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
+const runColumns = `id, repo_id, branch, head_sha, base_sha, submitted_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), requested_agent, resolved_agent, requested_model, requested_effort, COALESCE(adaptive_profile, 0), intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
 
 func scanRun(row interface {
 	Scan(...any) error
@@ -65,9 +70,30 @@ func scanRun(row interface {
 		&r.LastPushedSHA, &r.PushTargetKind, &r.PushTargetFingerprint, &r.PushRef,
 		&r.LastPushedAt, &r.PushGeneration, &r.PushActive,
 		&r.CustodyReturnedAt, &r.Error, &r.AwaitingAgentSince, &r.ParkedMS,
+		&r.RequestedAgent, &r.ResolvedAgent,
+		&r.RequestedModel, &r.RequestedEffort, &r.AdaptiveProfile,
 		&r.Intent, &r.IntentSource, &r.IntentSessionID, &r.IntentScore,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
+}
+
+// UpdateRunAgents records the run-scoped requested selection and the adapter
+// that configuration resolution actually launched.
+func (d *DB) UpdateRunAgents(id, requested, resolved string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET requested_agent = ?, resolved_agent = ?, updated_at = ? WHERE id = ?`, nullableString(requested), nullableString(resolved), now(), id)
+	if err != nil {
+		return fmt.Errorf("update run agents: %w", err)
+	}
+	return nil
+}
+
+// UpdateRunTuning records explicit model and effort choices for auditability.
+func (d *DB) UpdateRunTuning(id, model, effort string, adaptive bool) error {
+	_, err := d.sql.Exec(`UPDATE runs SET requested_model = ?, requested_effort = ?, adaptive_profile = ?, updated_at = ? WHERE id = ?`, nullableString(model), nullableString(effort), adaptive, now(), id)
+	if err != nil {
+		return fmt.Errorf("update run tuning: %w", err)
+	}
+	return nil
 }
 
 // InsertRun creates a new run record.

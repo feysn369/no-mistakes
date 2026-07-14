@@ -46,16 +46,17 @@ const (
 
 // GlobalConfig represents ~/.no-mistakes/config.yaml.
 type GlobalConfig struct {
-	Agent                types.AgentName     `yaml:"agent"`
-	Agents               []types.AgentName   `yaml:"-"`
-	ACPXPath             string              `yaml:"acpx_path"`
-	ACPRegistryOverrides map[string]string   `yaml:"acp_registry_overrides"`
-	AgentPathOverride    map[string]string   `yaml:"agent_path_override"`
-	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
-	CITimeout            time.Duration       `yaml:"-"`
-	StepQuietWarning     time.Duration       `yaml:"-"`
-	DaemonConnectTimeout time.Duration       `yaml:"-"`
-	LogLevel             string              `yaml:"log_level"`
+	Agent                types.AgentName                                     `yaml:"agent"`
+	Agents               []types.AgentName                                   `yaml:"-"`
+	ACPXPath             string                                              `yaml:"acpx_path"`
+	ACPRegistryOverrides map[string]string                                   `yaml:"acp_registry_overrides"`
+	AgentPathOverride    map[string]string                                   `yaml:"agent_path_override"`
+	AgentArgsOverride    map[string][]string                                 `yaml:"agent_args_override"`
+	PurposeProfiles      map[types.AgentName]map[string]types.PurposeProfile `yaml:"purpose_profiles"`
+	CITimeout            time.Duration                                       `yaml:"-"`
+	StepQuietWarning     time.Duration                                       `yaml:"-"`
+	DaemonConnectTimeout time.Duration                                       `yaml:"-"`
+	LogLevel             string                                              `yaml:"log_level"`
 	// SessionReuse controls per-run, per-role agent session reuse in the
 	// review loop (one durable reviewer session across full reviews, a
 	// separate durable fixer session across fix turns). Default true; set
@@ -68,20 +69,21 @@ type GlobalConfig struct {
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
 type globalConfigRaw struct {
-	Agent                agentList           `yaml:"agent"`
-	ACPXPath             string              `yaml:"acpx_path"`
-	ACPRegistryOverrides map[string]string   `yaml:"acp_registry_overrides"`
-	AgentPathOverride    map[string]string   `yaml:"agent_path_override"`
-	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
-	CITimeout            string              `yaml:"ci_timeout"`
-	DaemonConnectTimeout string              `yaml:"daemon_connect_timeout"`
-	BabysitTimeout       string              `yaml:"babysit_timeout"`
-	StepQuietWarning     string              `yaml:"step_quiet_warning"`
-	LogLevel             string              `yaml:"log_level"`
-	SessionReuse         *bool               `yaml:"session_reuse"`
-	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
-	Intent               IntentRaw           `yaml:"intent"`
-	Test                 TestRaw             `yaml:"test"`
+	Agent                agentList                                           `yaml:"agent"`
+	ACPXPath             string                                              `yaml:"acpx_path"`
+	ACPRegistryOverrides map[string]string                                   `yaml:"acp_registry_overrides"`
+	AgentPathOverride    map[string]string                                   `yaml:"agent_path_override"`
+	AgentArgsOverride    map[string][]string                                 `yaml:"agent_args_override"`
+	PurposeProfiles      map[types.AgentName]map[string]types.PurposeProfile `yaml:"purpose_profiles"`
+	CITimeout            string                                              `yaml:"ci_timeout"`
+	DaemonConnectTimeout string                                              `yaml:"daemon_connect_timeout"`
+	BabysitTimeout       string                                              `yaml:"babysit_timeout"`
+	StepQuietWarning     string                                              `yaml:"step_quiet_warning"`
+	LogLevel             string                                              `yaml:"log_level"`
+	SessionReuse         *bool                                               `yaml:"session_reuse"`
+	AutoFix              AutoFixRaw                                          `yaml:"auto_fix"`
+	Intent               IntentRaw                                           `yaml:"intent"`
+	Test                 TestRaw                                             `yaml:"test"`
 }
 
 // RepoConfig represents .no-mistakes.yaml in a repo root.
@@ -106,6 +108,9 @@ type RepoConfig struct {
 	// EffectiveRepoConfig): a contributor's pushed branch must not be able to
 	// weaken documentation rules for its own review.
 	Document DocumentRaw `yaml:"document"`
+	// Gate carries compact project context for gate agents. It is trusted-only
+	// because these instructions govern every agent invocation.
+	Gate GateRaw `yaml:"gate"`
 	// DisableProjectSettings opts the repository out of loading project-level
 	// agent settings/instructions (AGENTS.md/CLAUDE.md and the equivalent
 	// per-harness project settings) into gate agents. It exists for
@@ -127,6 +132,13 @@ type DocumentRaw struct {
 	Instructions string `yaml:"instructions"`
 }
 
+// GateRaw is the YAML representation of gate-agent context settings.
+type GateRaw struct {
+	// Instructions are compact, maintainer-authored project invariants prepended
+	// to every gate-agent prompt.
+	Instructions string `yaml:"instructions"`
+}
+
 func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	type repoConfigRaw struct {
 		Agent                  agentList   `yaml:"agent"`
@@ -137,6 +149,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		Intent                 IntentRaw   `yaml:"intent"`
 		Test                   TestRaw     `yaml:"test"`
 		Document               DocumentRaw `yaml:"document"`
+		Gate                   GateRaw     `yaml:"gate"`
 		DisableProjectSettings bool        `yaml:"disable_project_settings"`
 	}
 	var raw repoConfigRaw
@@ -152,6 +165,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Intent = raw.Intent
 	c.Test = raw.Test
 	c.Document = raw.Document
+	c.Gate = raw.Gate
 	c.DisableProjectSettings = raw.DisableProjectSettings
 	return nil
 }
@@ -194,16 +208,23 @@ type Config struct {
 	ACPRegistryOverrides map[string]string
 	AgentPathOverride    map[string]string
 	AgentArgsOverride    map[string][]string
+	PurposeProfiles      map[types.AgentName]map[string]types.PurposeProfile
 	CITimeout            time.Duration
 	StepQuietWarning     time.Duration
 	LogLevel             string
 	SessionReuse         bool
-	Commands             Commands
-	IgnorePatterns       []string
-	AutoFix              AutoFix
-	Intent               Intent
-	Test                 Test
-	Document             Document
+	// RunModel and RunEffort are transient persisted run overrides restored by
+	// daemon recovery. They are never read from repository configuration.
+	RunModel           string
+	RunEffort          string
+	RunAdaptiveProfile bool
+	Commands           Commands
+	IgnorePatterns     []string
+	AutoFix            AutoFix
+	Intent             Intent
+	Test               Test
+	Document           Document
+	Gate               Gate
 	// DisableProjectSettings is the resolved, trusted-only opt-out (see the
 	// RepoConfig field). When true, gate agents are launched with their
 	// project-level settings/instructions suppressed; the daemon fails the run
@@ -215,6 +236,12 @@ type Config struct {
 // trusted default-branch repo config and augment the built-in placement
 // policy in the document prompt.
 type Document struct {
+	Instructions string
+}
+
+// Gate is the resolved gate-agent context. Instructions come from the trusted
+// default-branch repo config and are prepended to every agent prompt.
+type Gate struct {
 	Instructions string
 }
 
@@ -368,6 +395,17 @@ log_level: info
 #     - service_tier="priority"
 #     - -c
 #     - model_reasoning_effort="low"
+#
+# Optional provider-specific model/effort profiles by pipeline purpose.
+# An exact purpose wins; "mechanical" is the conservative fallback for PR
+# drafting only. Explicit --model/--effort run overrides win.
+# purpose_profiles:
+#   codex:
+#     review: {model: gpt-5.5, effort: medium}
+#     mechanical: {model: gpt-5.5, effort: low}
+#   claude:
+#     review: {model: sonnet, effort: medium}
+#     mechanical: {model: haiku, effort: low}
 #
 # Maximum follow-up auto-fix attempts per step (0 = disabled after the initial pass)
 # Document fixes are attempted during the initial document pass.
@@ -734,6 +772,45 @@ func validateAgentArgsOverride(override map[string][]string) error {
 	return nil
 }
 
+func validatePurposeProfiles(profiles map[types.AgentName]map[string]types.PurposeProfile) error {
+	for provider, byPurpose := range profiles {
+		if provider != types.AgentClaude && provider != types.AgentCodex {
+			return fmt.Errorf("purpose_profiles.%s: only claude and codex support invocation-scoped tuning", provider)
+		}
+		for purpose, profile := range byPurpose {
+			if !safeProfileToken(purpose, 64) {
+				return fmt.Errorf("purpose_profiles.%s has invalid purpose %q", provider, purpose)
+			}
+			if profile.Model == "" && profile.Effort == "" {
+				return fmt.Errorf("purpose_profiles.%s.%s must set model or effort", provider, purpose)
+			}
+			if profile.Model != "" && !safeProfileToken(profile.Model, 128) {
+				return fmt.Errorf("purpose_profiles.%s.%s has invalid model %q", provider, purpose, profile.Model)
+			}
+			if profile.Effort != "" {
+				valid := profile.Effort == "low" || profile.Effort == "medium" || profile.Effort == "high" || profile.Effort == "xhigh" || (provider == types.AgentClaude && profile.Effort == "max")
+				if !valid {
+					return fmt.Errorf("purpose_profiles.%s.%s has unsupported effort %q", provider, purpose, profile.Effort)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func safeProfileToken(value string, max int) bool {
+	if value == "" || len(value) > max {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._:/-", r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // EnsureDefaultGlobalConfig writes the default config file at path if it does
 // not already exist. Failures are logged at debug level and silently ignored.
 func EnsureDefaultGlobalConfig(path string) {
@@ -802,6 +879,12 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 			return nil, err
 		}
 		cfg.AgentArgsOverride = raw.AgentArgsOverride
+	}
+	if raw.PurposeProfiles != nil {
+		if err := validatePurposeProfiles(raw.PurposeProfiles); err != nil {
+			return nil, err
+		}
+		cfg.PurposeProfiles = raw.PurposeProfiles
 	}
 	timeoutValue := raw.CITimeout
 	if timeoutValue == "" {
@@ -923,7 +1006,8 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 // pushed branch cannot inject shell or pick an agent. Document (the
 // documentation placement policy injected into the document gate prompt) is
 // trusted-only for the same reason: a pushed branch must not weaken the
-// documentation rules that gate itself. DisableProjectSettings is also
+// documentation rules that gate itself. Gate instructions and
+// DisableProjectSettings are also
 // trusted-only so a pushed branch cannot enable or defeat the gate-agent
 // project-instruction boundary. When allowRepoCommands is
 // true the maintainer has explicitly opted in (via allow_repo_commands on the
@@ -945,6 +1029,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 	effective := *pushed
 	if trusted != nil {
 		effective.Document = trusted.Document
+		effective.Gate = trusted.Gate
 		// disable_project_settings is a security boundary: honor it ONLY from the
 		// trusted default-branch copy so a pushed branch cannot turn the opt-out
 		// off (and re-enable its own AGENTS.md) or on. A nil trusted copy here
@@ -953,6 +1038,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.DisableProjectSettings = trusted.DisableProjectSettings
 	} else {
 		effective.Document = DocumentRaw{}
+		effective.Gate = GateRaw{}
 		effective.DisableProjectSettings = false
 	}
 	if allowRepoCommands {
@@ -1119,6 +1205,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		ACPRegistryOverrides: global.ACPRegistryOverrides,
 		AgentPathOverride:    global.AgentPathOverride,
 		AgentArgsOverride:    global.AgentArgsOverride,
+		PurposeProfiles:      global.PurposeProfiles,
 		CITimeout:            global.CITimeout,
 		StepQuietWarning:     global.StepQuietWarning,
 		LogLevel:             global.LogLevel,
@@ -1129,6 +1216,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Intent:               intent,
 		Test:                 test,
 		Document:             Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
+		Gate:                 Gate{Instructions: strings.TrimSpace(repo.Gate.Instructions)},
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,

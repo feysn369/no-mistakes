@@ -59,6 +59,10 @@ func newAxiRunCmd() *cobra.Command {
 	var autoYes bool
 	var skipValue string
 	var intent string
+	var agentValue string
+	var modelValue string
+	var effortValue string
+	var adaptiveProfile bool
 
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -83,23 +87,39 @@ func newAxiRunCmd() *cobra.Command {
 				"auto_yes":   autoYes,
 				"has_intent": strings.TrimSpace(intent) != "",
 				"has_skip":   strings.TrimSpace(skipValue) != "",
+				"has_agent":  strings.TrimSpace(agentValue) != "",
+				"has_model":  strings.TrimSpace(modelValue) != "",
+				"has_effort": strings.TrimSpace(effortValue) != "",
+				"adaptive":   adaptiveProfile,
 			}, func() error {
 				skipSteps, err := parseSkipSteps(skipValue)
 				if err != nil {
 					return emitError(cmd, 2, err.Error(),
 						"Valid steps: intent, rebase, review, test, document, lint, push, pr, ci")
 				}
-				return runAxiRun(cmd, autoYes, skipSteps, intent)
+				agentName, err := parseRunAgent(agentValue)
+				if err != nil {
+					return emitError(cmd, 2, err.Error())
+				}
+				overrides, err := parseRunTuning(agentName, modelValue, effortValue, adaptiveProfile)
+				if err != nil {
+					return emitError(cmd, 2, err.Error())
+				}
+				return runAxiRun(cmd, autoYes, skipSteps, intent, overrides)
 			})
 		},
 	}
 	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "auto-resolve every gate (fix findings, then accept) until a decision point or outcome")
 	cmd.Flags().StringVar(&skipValue, "skip", "", "comma-separated pipeline steps to skip")
 	cmd.Flags().StringVar(&intent, "intent", "", "what the user set out to accomplish (not a description of the diff); used instead of inferring from transcripts (required to start a run)")
+	cmd.Flags().StringVar(&agentValue, "agent", "", "pipeline agent for this run only (claude or codex)")
+	cmd.Flags().StringVar(&modelValue, "model", "", "model for this run only (requires --agent)")
+	cmd.Flags().StringVar(&effortValue, "effort", "", "reasoning effort for this run only (requires --agent)")
+	cmd.Flags().BoolVar(&adaptiveProfile, "adaptive-profile", false, "treat model/effort as a baseline and allow configured purpose profiles to override them")
 	return cmd
 }
 
-func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, intent string) error {
+func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, intent string, overrides types.RunOverrides) error {
 	ctx := cmd.Context()
 	env, err := openAxiRunEnv()
 	if err != nil {
@@ -121,7 +141,14 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 		return emitError(cmd, 1, fmt.Sprintf("get current HEAD: %v", err))
 	}
 
-	runID := activeRunID(env, branch, headSHA)
+	active := activeRunInfo(env, branch, headSHA)
+	if conflict := activeRunOverrideConflict(active, overrides); conflict != nil {
+		return emitError(cmd, 2, conflict.Error())
+	}
+	runID := ""
+	if active != nil {
+		runID = active.ID
+	}
 	if runID == "" {
 		if err := configErrorForFreshAxiRun(env, runID); err != nil {
 			return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
@@ -142,7 +169,7 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 			return guard(cmd)
 		}
 		var err error
-		runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent)
+		runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent, overrides)
 		if err != nil {
 			return emitError(cmd, 1, err.Error())
 		}
@@ -155,6 +182,49 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 	return renderDriveResult(cmd, run, ciReady)
 }
 
+func activeRunOverrideConflict(active *ipc.RunInfo, overrides types.RunOverrides) error {
+	if active == nil {
+		return nil
+	}
+	if overrides.Agent != "" {
+		selected := active.ResolvedAgent
+		if active.RequestedAgent != nil {
+			selected = active.RequestedAgent
+		}
+		if selected == nil || *selected != string(overrides.Agent) {
+			return fmt.Errorf("active run %s uses agent %q; cannot reattach with --agent %s", active.ID, stringValue(selected), overrides.Agent)
+		}
+	}
+	if overrides.Model != "" && stringValue(active.RequestedModel) != overrides.Model {
+		return fmt.Errorf("active run %s uses model %q; cannot reattach with --model %s", active.ID, stringValue(active.RequestedModel), overrides.Model)
+	}
+	if overrides.Effort != "" && stringValue(active.RequestedEffort) != overrides.Effort {
+		return fmt.Errorf("active run %s uses effort %q; cannot reattach with --effort %s", active.ID, stringValue(active.RequestedEffort), overrides.Effort)
+	}
+	if overrides.AdaptiveProfile && !active.AdaptiveProfile {
+		return fmt.Errorf("active run %s uses a locked profile; cannot reattach with --adaptive-profile", active.ID)
+	}
+	if !overrides.AdaptiveProfile && active.AdaptiveProfile && (overrides.Agent != "" || overrides.Model != "" || overrides.Effort != "") {
+		return fmt.Errorf("active run %s uses an adaptive profile; reattach without profile flags or include --adaptive-profile", active.ID)
+	}
+	return nil
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return "configured default"
+	}
+	return *value
+}
+
+func activeRunInfo(env *axiEnv, branch, headSHA string) *ipc.RunInfo {
+	var active ipc.GetActiveRunResult
+	if err := env.client.Call(ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
+		return nil
+	}
+	return activeRunInfoForHead(active.Run, headSHA)
+}
+
 func configErrorForFreshAxiRun(env *axiEnv, runID string) error {
 	if runID != "" {
 		return nil
@@ -164,11 +234,11 @@ func configErrorForFreshAxiRun(env *axiEnv, runID string) error {
 
 // activeRunID returns the ID of a non-terminal run for branch and head, or "" if none.
 func activeRunID(env *axiEnv, branch, headSHA string) string {
-	var active ipc.GetActiveRunResult
-	if err := env.client.Call(ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
+	run := activeRunInfo(env, branch, headSHA)
+	if run == nil {
 		return ""
 	}
-	return activeRunIDForHead(&active, headSHA)
+	return run.ID
 }
 
 func activeRunIDForHead(active *ipc.GetActiveRunResult, headSHA string) string {
@@ -219,10 +289,22 @@ func preflightGuard(ctx context.Context, env *axiEnv, branch string) func(*cobra
 // the gate to trigger a pipeline, and falls back to a rerun when the push was a
 // no-op (the gate already had this commit). Callers must check for an existing
 // active run first (see activeRunID) and apply pre-flight guards.
-func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSteps []types.StepName, intent string) (string, error) {
+func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSteps []types.StepName, intent string, overrides types.RunOverrides) (string, error) {
 	pushOptions := formatSkipPushOptions(skipSteps)
 	if opt := formatIntentPushOption(intent); opt != "" {
 		pushOptions = append(pushOptions, opt)
+	}
+	if opt := formatAgentPushOption(overrides.Agent); opt != "" {
+		pushOptions = append(pushOptions, opt)
+	}
+	if opt := formatStringPushOption(modelPushOptionPrefix, overrides.Model); opt != "" {
+		pushOptions = append(pushOptions, opt)
+	}
+	if opt := formatStringPushOption(effortPushOptionPrefix, overrides.Effort); opt != "" {
+		pushOptions = append(pushOptions, opt)
+	}
+	if overrides.AdaptiveProfile {
+		pushOptions = append(pushOptions, adaptiveProfilePushOption)
 	}
 	priorRunIDs, err := runIDsForHead(env.client, env.repo.ID, branch, headSHA)
 	if err != nil {
@@ -242,7 +324,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 	// No run appeared: the push was likely up-to-date. Rerun the latest gate
 	// head so `axi run` is still useful when there are no new commits.
 	var rr ipc.RerunResult
-	if err := env.client.Call(ipc.MethodRerun, rerunParams(env.repo.ID, branch, skipSteps, intent), &rr); err != nil {
+	if err := env.client.Call(ipc.MethodRerun, rerunParams(env.repo.ID, branch, skipSteps, intent, overrides), &rr); err != nil {
 		return "", fmt.Errorf("no run started for %q: %v", branch, err)
 	}
 	return rr.RunID, nil
@@ -326,8 +408,8 @@ func activeRunLookupParams(repoID, branch string) *ipc.GetActiveRunParams {
 	return &ipc.GetActiveRunParams{RepoID: repoID, Branch: branch}
 }
 
-func rerunParams(repoID, branch string, skipSteps []types.StepName, intent string) *ipc.RerunParams {
-	return &ipc.RerunParams{RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent}
+func rerunParams(repoID, branch string, skipSteps []types.StepName, intent string, overrides types.RunOverrides) *ipc.RerunParams {
+	return &ipc.RerunParams{RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent, Agent: overrides.Agent, Model: overrides.Model, Effort: overrides.Effort, AdaptiveProfile: overrides.AdaptiveProfile}
 }
 
 // driveRun polls a run until it reaches an approval gate, a terminal state, or

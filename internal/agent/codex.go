@@ -21,6 +21,8 @@ import (
 type codexAgent struct {
 	bin       string
 	extraArgs []string
+	model     string
+	effort    string
 	// disableProjectSettings is the resolved, trusted-only opt-out. When true,
 	// buildArgs suppresses codex's project-level settings/instructions surface.
 	disableProjectSettings bool
@@ -89,7 +91,7 @@ func (a *codexAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error)
 	if opts.Session != nil {
 		resumeID = opts.Session.ID
 	}
-	args := a.buildArgs(opts.Prompt, schemaPath, resumeID)
+	args := a.buildArgsWithTuning(opts.Prompt, schemaPath, resumeID, opts.Model, opts.Effort)
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = opts.CWD
 	cmd.Stdin = nil
@@ -160,19 +162,39 @@ func (a *codexAgent) Close() error { return nil }
 
 // buildArgs constructs the codex CLI arguments. User-supplied extraArgs are
 // inserted between "exec" and the prompt so user flags (e.g. -m, --sandbox)
-// take effect. If the user declared their own execution-mode flag, the
+// take effect. Managed run/invocation tuning replaces conflicting model or
+// reasoning-effort flags because Codex rejects duplicate singleton options.
+// If the user declared their own execution-mode flag, the
 // default --dangerously-bypass-approvals-and-sandbox is not added.
 // A non-empty resumeID routes through `codex exec resume <id> <prompt>`,
 // which exposes a narrower flag surface than `codex exec` (no --color, no
 // -s/--sandbox as of codex 0.144): unsupported user extraArgs make the
 // invocation fail fast and the caller's cold fallback preserves correctness.
 func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
+	return a.buildArgsWithTuning(prompt, schemaPath, resumeID, "", "")
+}
+
+func (a *codexAgent) buildArgsWithTuning(prompt, schemaPath, resumeID, invocationModel, invocationEffort string) []string {
+	model := a.model
+	if invocationModel != "" {
+		model = invocationModel
+	}
+	effort := a.effort
+	if invocationEffort != "" {
+		effort = invocationEffort
+	}
 	args := make([]string, 0, len(a.extraArgs)+11)
 	args = append(args, "exec")
 	if resumeID != "" {
 		args = append(args, "resume")
 	}
-	args = append(args, a.extraArgs...)
+	args = append(args, withoutCodexTuning(a.extraArgs, model != "", effort != "")...)
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--config", fmt.Sprintf("model_reasoning_effort=%q", effort))
+	}
 	if resumeID != "" {
 		args = append(args, resumeID)
 	}
@@ -214,6 +236,29 @@ func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
 		}
 	}
 	return args
+}
+
+func withoutCodexTuning(args []string, stripModel, stripEffort bool) []string {
+	filtered := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if stripModel && (arg == "--model" || arg == "-m") {
+			i++
+			continue
+		}
+		if stripModel && (strings.HasPrefix(arg, "--model=") || strings.HasPrefix(arg, "-m=")) {
+			continue
+		}
+		if stripEffort && (arg == "--config" || arg == "-c") && i+1 < len(args) && strings.HasPrefix(args[i+1], "model_reasoning_effort=") {
+			i++
+			continue
+		}
+		if stripEffort && (strings.HasPrefix(arg, "--config=model_reasoning_effort=") || strings.HasPrefix(arg, "-c=model_reasoning_effort=")) {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
 }
 
 // codexEffectiveProjectDocSuppressed reports whether the EFFECTIVE codex

@@ -77,6 +77,82 @@ func TestFormatSkipPushOptions(t *testing.T) {
 	}
 }
 
+func TestAgentPushOptionRoundTrip(t *testing.T) {
+	for _, want := range []types.AgentName{types.AgentClaude, types.AgentCodex} {
+		got, err := parseAgentPushOptions([]string{"ci.skip", formatAgentPushOption(want)})
+		if err != nil {
+			t.Fatalf("parseAgentPushOptions(%q): %v", want, err)
+		}
+		if got != want {
+			t.Fatalf("parseAgentPushOptions(%q) = %q", want, got)
+		}
+	}
+}
+
+func TestParseAgentPushOptionsRejectsConflict(t *testing.T) {
+	_, err := parseAgentPushOptions([]string{
+		"no-mistakes.agent=claude",
+		"no-mistakes.agent=codex",
+	})
+	if err == nil {
+		t.Fatal("expected conflicting run agents to fail")
+	}
+}
+
+func TestParseRunAgentRejectsUnsupportedAgent(t *testing.T) {
+	if _, err := parseRunAgent("auto"); err == nil {
+		t.Fatal("expected auto to be rejected for a run-scoped override")
+	}
+}
+
+func TestRunTuningRequiresExplicitProvider(t *testing.T) {
+	if _, err := parseRunTuning("", "gpt-5.5", "medium", false); err == nil {
+		t.Fatal("provider-specific tuning without --agent should fail")
+	}
+	got, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "xhigh", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "gpt-5.5" || got.Effort != "xhigh" {
+		t.Fatalf("unexpected tuning: %#v", got)
+	}
+	if _, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "max", false); err == nil {
+		t.Fatal("codex max effort should fail")
+	}
+	if _, err := parseRunTuning(types.AgentClaude, "opus", "max", false); err != nil {
+		t.Fatalf("claude max effort should pass: %v", err)
+	}
+	adaptive, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "medium", true)
+	if err != nil || !adaptive.AdaptiveProfile {
+		t.Fatalf("adaptive baseline rejected: %#v, %v", adaptive, err)
+	}
+	if _, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "", true); err == nil {
+		t.Fatal("incomplete adaptive baseline should be rejected")
+	}
+}
+
+func TestModelAndEffortPushOptionsRoundTrip(t *testing.T) {
+	options := []string{
+		formatStringPushOption(modelPushOptionPrefix, "sonnet"),
+		formatStringPushOption(effortPushOptionPrefix, "high"),
+	}
+	model, err := parseStringPushOption(options, modelPushOptionPrefix, "model")
+	if err != nil || model != "sonnet" {
+		t.Fatalf("model = %q, err=%v", model, err)
+	}
+	effort, err := parseStringPushOption(options, effortPushOptionPrefix, "effort")
+	if err != nil || effort != "high" {
+		t.Fatalf("effort = %q, err=%v", effort, err)
+	}
+	if hasPushOption(options, adaptiveProfilePushOption) {
+		t.Fatal("adaptive mode appeared without its push option")
+	}
+	options = append(options, adaptiveProfilePushOption)
+	if !hasPushOption(options, adaptiveProfilePushOption) {
+		t.Fatal("adaptive push option was not detected")
+	}
+}
+
 func TestIntentPushOptionRoundTrip(t *testing.T) {
 	// Multi-line, comma- and colon-bearing intent must survive the
 	// line-oriented push-option transport intact.

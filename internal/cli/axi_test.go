@@ -440,12 +440,51 @@ func TestConfigErrorForFreshAxiRunAllowsReattach(t *testing.T) {
 }
 
 func TestRerunParamsIncludeSkipSteps(t *testing.T) {
-	params := rerunParams("repo-1", "feature/x", []types.StepName{types.StepReview}, "user goal")
+	params := rerunParams("repo-1", "feature/x", []types.StepName{types.StepReview}, "user goal", types.RunOverrides{Agent: types.AgentCodex, Model: "gpt-5.5", Effort: "high", AdaptiveProfile: true})
 	if params.RepoID != "repo-1" || params.Branch != "feature/x" || params.Intent != "user goal" {
 		t.Fatalf("unexpected rerun params: %#v", params)
 	}
 	if len(params.SkipSteps) != 1 || params.SkipSteps[0] != types.StepReview {
 		t.Fatalf("SkipSteps = %#v, want review", params.SkipSteps)
+	}
+	if params.Agent != types.AgentCodex {
+		t.Fatalf("Agent = %q, want codex", params.Agent)
+	}
+	if params.Model != "gpt-5.5" || params.Effort != "high" {
+		t.Fatalf("tuning = %q/%q, want gpt-5.5/high", params.Model, params.Effort)
+	}
+	if !params.AdaptiveProfile {
+		t.Fatal("adaptive profile mode missing from rerun params")
+	}
+}
+
+func TestActiveRunAgentOverrideMustMatch(t *testing.T) {
+	codex := string(types.AgentCodex)
+	run := &ipc.RunInfo{ID: "run-1", Status: types.RunRunning, HeadSHA: "head", RequestedAgent: &codex, ResolvedAgent: &codex}
+
+	if got := activeRunOverrideConflict(run, types.RunOverrides{Agent: types.AgentCodex}); got != nil {
+		t.Fatalf("matching override should reattach: %v", got)
+	}
+	if got := activeRunOverrideConflict(run, types.RunOverrides{Agent: types.AgentClaude}); got == nil {
+		t.Fatal("conflicting override should fail")
+	}
+}
+
+func TestActiveRunAdaptiveProfileMustMatchExplicitReattach(t *testing.T) {
+	codex, model, effort := "codex", "gpt-5.5", "medium"
+	adaptive := &ipc.RunInfo{ID: "run-adaptive", RequestedAgent: &codex, ResolvedAgent: &codex, RequestedModel: &model, RequestedEffort: &effort, AdaptiveProfile: true}
+
+	if got := activeRunOverrideConflict(adaptive, types.RunOverrides{}); got != nil {
+		t.Fatalf("flag-free reattach should preserve the active mode: %v", got)
+	}
+	if got := activeRunOverrideConflict(adaptive, types.RunOverrides{Agent: types.AgentCodex, Model: model, Effort: effort}); got == nil {
+		t.Fatal("locked flags must not silently reattach to an adaptive run")
+	}
+	locked := *adaptive
+	locked.ID = "run-locked"
+	locked.AdaptiveProfile = false
+	if got := activeRunOverrideConflict(&locked, types.RunOverrides{Agent: types.AgentCodex, Model: model, Effort: effort, AdaptiveProfile: true}); got == nil {
+		t.Fatal("adaptive flags must not silently reattach to a locked run")
 	}
 }
 
@@ -677,7 +716,7 @@ func TestAxiRunReportsInvalidGlobalConfig(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 	cmd.SetOut(&out)
-	if err := runAxiRun(cmd, false, nil, "user goal"); err == nil {
+	if err := runAxiRun(cmd, false, nil, "user goal", types.RunOverrides{}); err == nil {
 		t.Fatalf("axi run should fail on invalid global config:\n%s", out.String())
 	}
 	got := out.String()
