@@ -71,7 +71,7 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	if opts.Session != nil {
 		resumeID = opts.Session.ID
 	}
-	args := a.buildArgs(opts.Prompt, opts.JSONSchema, resumeID)
+	args := a.buildArgsWithTuning(opts.Prompt, opts.JSONSchema, resumeID, opts.Model, opts.Effort)
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = opts.CWD
 	cmd.Stdin = nil
@@ -169,6 +169,10 @@ func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage To
 // (never --fork-session: the session identity must stay stable so later
 // turns keep resuming the same conversation).
 func (a *claudeAgent) buildArgs(prompt string, schema json.RawMessage, resumeID string) []string {
+	return a.buildArgsWithTuning(prompt, schema, resumeID, "", "")
+}
+
+func (a *claudeAgent) buildArgsWithTuning(prompt string, schema json.RawMessage, resumeID, invocationModel, invocationEffort string) []string {
 	args := make([]string, 0, len(a.extraArgs)+12)
 	args = append(args, a.extraArgs...)
 	if a.model != "" {
@@ -176,6 +180,12 @@ func (a *claudeAgent) buildArgs(prompt string, schema json.RawMessage, resumeID 
 	}
 	if a.effort != "" {
 		args = append(args, "--effort", a.effort)
+	}
+	if invocationModel != "" {
+		args = append(args, "--model", invocationModel)
+	}
+	if invocationEffort != "" {
+		args = append(args, "--effort", invocationEffort)
 	}
 	args = append(args,
 		"-p", prompt,

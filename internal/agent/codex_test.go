@@ -47,6 +47,18 @@ func TestCodexAgent_RunTuningOverridesGlobalArgs(t *testing.T) {
 	}
 }
 
+func TestCodexAgent_InvocationTuningWorksOnResume(t *testing.T) {
+	ca := &codexAgent{bin: "codex", model: "run-default", effort: "medium"}
+	args := ca.buildArgsWithTuning("prompt", "", "thread-1", "gpt-5.5-codex", "low")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--model\x00run-default\x00--config\x00model_reasoning_effort=\"medium\"\x00--model\x00gpt-5.5-codex\x00--config\x00model_reasoning_effort=\"low\"") {
+		t.Fatalf("invocation tuning must follow run defaults and win: %v", args)
+	}
+	if !strings.Contains(joined, "resume\x00") || !strings.Contains(joined, "thread-1") {
+		t.Fatalf("resume arguments lost: %v", args)
+	}
+}
+
 func TestCodexAgent_BuildArgs_ExtraArgsAfterExec(t *testing.T) {
 	ca := &codexAgent{bin: "codex", extraArgs: []string{"-m", "gpt-5.4"}}
 	args := ca.buildArgs("fix it", "", "")

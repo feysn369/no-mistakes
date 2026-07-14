@@ -101,6 +101,7 @@ func (d *agentDisambiguator) Disambiguate(ctx context.Context, diffFiles []strin
 		Prompt:     buildDisambiguationPrompt(diffFiles, candidates, packetPaths),
 		CWD:        d.cwd,
 		JSONSchema: disambiguatorSchema,
+		Purpose:    "intent-disambiguate",
 	})
 	if err != nil {
 		return DisambiguationChoice{}, err

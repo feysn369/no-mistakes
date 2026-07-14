@@ -48,6 +48,18 @@ func TestClaudeAgent_RunTuningOverridesGlobalArgs(t *testing.T) {
 	}
 }
 
+func TestClaudeAgent_InvocationTuningWorksOnResume(t *testing.T) {
+	ca := &claudeAgent{bin: "claude", model: "sonnet", effort: "medium"}
+	args := ca.buildArgsWithTuning("prompt", nil, "session-1", "haiku", "low")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "--model\x00sonnet\x00--effort\x00medium\x00--model\x00haiku\x00--effort\x00low") {
+		t.Fatalf("invocation tuning must follow run defaults and win: %v", args)
+	}
+	if !strings.Contains(joined, "--resume\x00session-1") {
+		t.Fatalf("resume arguments lost: %v", args)
+	}
+}
+
 func TestClaudeAgent_BuildArgs_NoSchema(t *testing.T) {
 	ca := &claudeAgent{bin: "claude"}
 	args := ca.buildArgs("prompt", nil, "")

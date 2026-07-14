@@ -91,7 +91,7 @@ func (a *codexAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error)
 	if opts.Session != nil {
 		resumeID = opts.Session.ID
 	}
-	args := a.buildArgs(opts.Prompt, schemaPath, resumeID)
+	args := a.buildArgsWithTuning(opts.Prompt, schemaPath, resumeID, opts.Model, opts.Effort)
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = opts.CWD
 	cmd.Stdin = nil
@@ -169,6 +169,10 @@ func (a *codexAgent) Close() error { return nil }
 // -s/--sandbox as of codex 0.144): unsupported user extraArgs make the
 // invocation fail fast and the caller's cold fallback preserves correctness.
 func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
+	return a.buildArgsWithTuning(prompt, schemaPath, resumeID, "", "")
+}
+
+func (a *codexAgent) buildArgsWithTuning(prompt, schemaPath, resumeID, invocationModel, invocationEffort string) []string {
 	args := make([]string, 0, len(a.extraArgs)+11)
 	args = append(args, "exec")
 	if resumeID != "" {
@@ -180,6 +184,12 @@ func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
 	}
 	if a.effort != "" {
 		args = append(args, "--config", fmt.Sprintf("model_reasoning_effort=%q", a.effort))
+	}
+	if invocationModel != "" {
+		args = append(args, "--model", invocationModel)
+	}
+	if invocationEffort != "" {
+		args = append(args, "--config", fmt.Sprintf("model_reasoning_effort=%q", invocationEffort))
 	}
 	if resumeID != "" {
 		args = append(args, resumeID)
