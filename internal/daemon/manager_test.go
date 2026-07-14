@@ -9,12 +9,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
+
+func TestInheritRunOverridesDoesNotCrossProviders(t *testing.T) {
+	codex, model, effort := "codex", "gpt-5.5", "xhigh"
+	previous := &db.Run{RequestedAgent: &codex, RequestedModel: &model, RequestedEffort: &effort}
+
+	got := inheritRunOverrides(types.RunOverrides{}, previous)
+	if got.Agent != types.AgentCodex || got.Model != model || got.Effort != effort {
+		t.Fatalf("same-provider rerun should inherit all choices: %#v", got)
+	}
+
+	got = inheritRunOverrides(types.RunOverrides{Agent: types.AgentClaude}, previous)
+	if got.Model != "" || got.Effort != "" {
+		t.Fatalf("provider switch must not inherit provider-specific tuning: %#v", got)
+	}
+}
+
+func TestApplyRecoveredRunAgentRestoresProviderAndTuning(t *testing.T) {
+	codex, model, effort := "codex", "gpt-5.5", "xhigh"
+	cfg := &config.Config{Agent: types.AgentClaude, Agents: []types.AgentName{types.AgentClaude}}
+	applyRecoveredRunAgent(cfg, &db.Run{
+		RequestedAgent:  &codex,
+		ResolvedAgent:   &codex,
+		RequestedModel:  &model,
+		RequestedEffort: &effort,
+	})
+	if cfg.Agent != types.AgentCodex || len(cfg.Agents) != 1 || cfg.Agents[0] != types.AgentCodex {
+		t.Fatalf("recovered provider = %s/%v, want codex/[codex]", cfg.Agent, cfg.Agents)
+	}
+	if cfg.RunModel != model || cfg.RunEffort != effort {
+		t.Fatalf("recovered tuning = %q/%q, want %q/%q", cfg.RunModel, cfg.RunEffort, model, effort)
+	}
+}
+
+func TestApplyRecoveredRunAgentRestoresTuningBeforeProviderGuard(t *testing.T) {
+	model, effort := "sonnet", "high"
+	cfg := &config.Config{Agent: types.AgentClaude}
+	applyRecoveredRunAgent(cfg, &db.Run{RequestedModel: &model, RequestedEffort: &effort})
+	if cfg.RunModel != model || cfg.RunEffort != effort {
+		t.Fatalf("recovered tuning = %q/%q, want %q/%q", cfg.RunModel, cfg.RunEffort, model, effort)
+	}
+}
 
 // --- RunManager integration tests ---
 

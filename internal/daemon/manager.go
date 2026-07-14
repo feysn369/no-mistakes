@@ -217,6 +217,12 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 // daemon restarts. Repository/global config may have changed since the run
 // started, but recovery must resume the adapter recorded for that run.
 func applyRecoveredRunAgent(cfg *config.Config, run *db.Run) {
+	if run.RequestedModel != nil {
+		cfg.RunModel = *run.RequestedModel
+	}
+	if run.RequestedEffort != nil {
+		cfg.RunEffort = *run.RequestedEffort
+	}
 	if run.RequestedAgent == nil || run.ResolvedAgent == nil {
 		return
 	}
@@ -240,6 +246,8 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(str
 	for _, name := range agents {
 		next, err := agent.NewWithOptions(name, cfg.AgentPathFor(name), cfg.AgentArgsFor(name), agent.Options{
 			ACPRegistryOverrides:   cfg.ACPRegistryOverrides,
+			Model:                  cfg.RunModel,
+			Effort:                 cfg.RunEffort,
 			DisableProjectSettings: cfg.DisableProjectSettings,
 		})
 		if err != nil {
@@ -550,12 +558,12 @@ func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushRec
 	}
 
 	branch := branchFromRef(params.Ref)
-	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent, params.Agent)
+	return m.startRun(ctx, repo, branch, params.New, params.Old, "push", params.SkipSteps, params.Intent, types.RunOverrides{Agent: params.Agent, Model: params.Model, Effort: params.Effort})
 }
 
 // HandleRerun creates a new run for the latest gate head on a branch. An
 // optional intent is stamped onto the new run.
-func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch string, skipSteps []types.StepName, intent string, agentName types.AgentName) (string, error) {
+func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch string, skipSteps []types.StepName, intent string, overrides types.RunOverrides) (string, error) {
 	repo, err := m.db.GetRepo(repoID)
 	if err != nil {
 		return "", fmt.Errorf("get repo: %w", err)
@@ -598,16 +606,39 @@ func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch string, ski
 		baseSHA = matchingHead.BaseSHA
 	}
 
-	if agentName == "" && latestForBranch.RequestedAgent != nil {
-		agentName = types.AgentName(*latestForBranch.RequestedAgent)
+	overrides = inheritRunOverrides(overrides, latestForBranch)
+	return m.startRun(ctx, repo, branch, headSHA, baseSHA, "rerun", skipSteps, intent, overrides)
+}
+
+func inheritRunOverrides(overrides types.RunOverrides, previous *db.Run) types.RunOverrides {
+	if previous == nil {
+		return overrides
 	}
-	return m.startRun(ctx, repo, branch, headSHA, baseSHA, "rerun", skipSteps, intent, agentName)
+	previousAgent := types.AgentName("")
+	if previous.RequestedAgent != nil {
+		previousAgent = types.AgentName(*previous.RequestedAgent)
+	}
+	if overrides.Agent == "" {
+		overrides.Agent = previousAgent
+	}
+	// Model names are provider-specific. Inherit tuning only while keeping the
+	// same explicit provider; switching providers starts from that provider's
+	// configured defaults unless the caller supplies replacement tuning.
+	if overrides.Agent == previousAgent {
+		if overrides.Model == "" && previous.RequestedModel != nil {
+			overrides.Model = *previous.RequestedModel
+		}
+		if overrides.Effort == "" && previous.RequestedEffort != nil {
+			overrides.Effort = *previous.RequestedEffort
+		}
+	}
+	return overrides
 }
 
 // startRun creates a run, sets up a worktree, and launches pipeline execution.
 // A non-empty intent is stamped onto the run as agent-supplied, so the intent
 // step uses it instead of inferring from transcripts.
-func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent string, agentName types.AgentName) (string, error) {
+func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent string, overrides types.RunOverrides) (string, error) {
 	branchRole := telemetryBranchRole(branch, repo.DefaultBranch)
 	trackStartFailure := func(stage string) {
 		telemetry.Track("run", telemetry.Fields{
@@ -617,9 +648,13 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			"stage":       stage,
 		})
 	}
-	if agentName != "" && agentName != types.AgentClaude && agentName != types.AgentCodex {
+	if overrides.Agent != "" && overrides.Agent != types.AgentClaude && overrides.Agent != types.AgentCodex {
 		trackStartFailure("validate_agent")
-		return "", fmt.Errorf("unsupported run agent %q (valid: claude, codex)", agentName)
+		return "", fmt.Errorf("unsupported run agent %q (valid: claude, codex)", overrides.Agent)
+	}
+	if (overrides.Model != "" || overrides.Effort != "") && overrides.Agent == "" {
+		trackStartFailure("validate_tuning")
+		return "", fmt.Errorf("run model/effort require an explicit run agent")
 	}
 
 	if m.shuttingDown.Load() {
@@ -750,9 +785,9 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		slog.Info("repo commands/agent loaded from default branch, not pushed branch", "run_id", run.ID, "branch", branch, "default_branch", repo.DefaultBranch)
 	}
 	cfg := config.Merge(globalCfg, effectiveRepoCfg)
-	if agentName != "" {
-		cfg.Agent = agentName
-		cfg.Agents = []types.AgentName{agentName}
+	if overrides.Agent != "" {
+		cfg.Agent = overrides.Agent
+		cfg.Agents = []types.AgentName{overrides.Agent}
 	}
 
 	// Create agent. In demo mode, skip resolution and use a no-op agent.
@@ -765,14 +800,25 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			trackStartFailure("resolve_agent")
 			return "", err
 		}
-		if err := m.db.UpdateRunAgents(run.ID, string(agentName), string(cfg.Agent)); err != nil {
+		if err := m.db.UpdateRunAgents(run.ID, string(overrides.Agent), string(cfg.Agent)); err != nil {
+			return "", err
+		}
+		if err := m.db.UpdateRunTuning(run.ID, overrides.Model, overrides.Effort); err != nil {
 			return "", err
 		}
 		resolved := string(cfg.Agent)
 		run.ResolvedAgent = &resolved
-		if agentName != "" {
-			requested := string(agentName)
+		if overrides.Agent != "" {
+			requested := string(overrides.Agent)
 			run.RequestedAgent = &requested
+		}
+		if overrides.Model != "" {
+			model := overrides.Model
+			run.RequestedModel = &model
+		}
+		if overrides.Effort != "" {
+			effort := overrides.Effort
+			run.RequestedEffort = &effort
 		}
 		agents := cfg.Agents
 		if len(agents) == 0 {
@@ -782,6 +828,8 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		for _, name := range agents {
 			next, agErr := agent.NewWithOptions(name, cfg.AgentPathFor(name), cfg.AgentArgsFor(name), agent.Options{
 				ACPRegistryOverrides:   cfg.ACPRegistryOverrides,
+				Model:                  overrides.Model,
+				Effort:                 overrides.Effort,
 				DisableProjectSettings: cfg.DisableProjectSettings,
 			})
 			if agErr != nil {
@@ -819,8 +867,14 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		"step_count":     len(execSteps),
 		"demo_mode":      steps.IsDemoMode(),
 	}
-	if agentName != "" {
-		startedFields["requested_agent"] = string(agentName)
+	if overrides.Agent != "" {
+		startedFields["requested_agent"] = string(overrides.Agent)
+	}
+	if overrides.Model != "" {
+		startedFields["requested_model"] = overrides.Model
+	}
+	if overrides.Effort != "" {
+		startedFields["requested_effort"] = overrides.Effort
 	}
 	telemetry.Track("run", startedFields)
 

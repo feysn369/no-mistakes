@@ -105,6 +105,40 @@ func TestParseRunAgentRejectsUnsupportedAgent(t *testing.T) {
 	}
 }
 
+func TestRunTuningRequiresExplicitProvider(t *testing.T) {
+	if _, err := parseRunTuning("", "gpt-5.5", "medium"); err == nil {
+		t.Fatal("provider-specific tuning without --agent should fail")
+	}
+	got, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "xhigh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "gpt-5.5" || got.Effort != "xhigh" {
+		t.Fatalf("unexpected tuning: %#v", got)
+	}
+	if _, err := parseRunTuning(types.AgentCodex, "gpt-5.5", "max"); err == nil {
+		t.Fatal("codex max effort should fail")
+	}
+	if _, err := parseRunTuning(types.AgentClaude, "opus", "max"); err != nil {
+		t.Fatalf("claude max effort should pass: %v", err)
+	}
+}
+
+func TestModelAndEffortPushOptionsRoundTrip(t *testing.T) {
+	options := []string{
+		formatStringPushOption(modelPushOptionPrefix, "sonnet"),
+		formatStringPushOption(effortPushOptionPrefix, "high"),
+	}
+	model, err := parseStringPushOption(options, modelPushOptionPrefix, "model")
+	if err != nil || model != "sonnet" {
+		t.Fatalf("model = %q, err=%v", model, err)
+	}
+	effort, err := parseStringPushOption(options, effortPushOptionPrefix, "effort")
+	if err != nil || effort != "high" {
+		t.Fatalf("effort = %q, err=%v", effort, err)
+	}
+}
+
 func TestIntentPushOptionRoundTrip(t *testing.T) {
 	// Multi-line, comma- and colon-bearing intent must survive the
 	// line-oriented push-option transport intact.

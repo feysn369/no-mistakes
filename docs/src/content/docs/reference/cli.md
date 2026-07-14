@@ -83,6 +83,8 @@ An active run on another branch does not block starting validation for the curre
 no-mistakes axi run --intent "the user's goal"
 no-mistakes axi run --intent "the user's goal" --skip test,lint
 no-mistakes axi run --intent "the user's goal" --yes
+no-mistakes axi run --intent "the user's goal" --agent codex --model gpt-5.5 --effort medium
+no-mistakes axi run --intent "the user's goal" --agent claude --model sonnet --effort high
 ```
 
 | Flag          | Type     | Default | Description                                                      |
@@ -90,12 +92,20 @@ no-mistakes axi run --intent "the user's goal" --yes
 | `--intent`    | `string` | (none)  | What the user set out to accomplish; required to start a new run |
 | `-y`, `--yes` | `bool`   | `false` | Auto-resolve every gate until a decision point or outcome        |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip                           |
+| `--agent`     | `string` | (none)  | Run-scoped `codex` or `claude` selection                         |
+| `--model`     | `string` | (none)  | Run-scoped model; requires `--agent`                              |
+| `--effort`    | `string` | (none)  | Run-scoped reasoning effort; requires `--agent`                   |
 
 `--intent` is not a description of the diff.
 It is the user's goal or request, and no-mistakes uses it verbatim instead of transcript inference.
 Err on the side of completeness: include the goal, important decisions and tradeoffs, constraints or approaches ruled in or out, and explicit requests that might otherwise look surprising in the diff.
 When starting a new run, `axi run` refuses the default branch and uncommitted working trees with actionable errors instead of auto-branching or auto-committing.
 Reattaching to an in-flight run does not require `--intent`.
+An explicit model or effort applies to every agent-backed step and fix round in that run.
+It is persisted with the run, appears in AXI status, and never rewrites global or repository configuration.
+Reattaching with a conflicting agent, model, or effort fails instead of silently changing the active run.
+`no-mistakes rerun` inherits explicit choices from the previous run unless replacements are supplied.
+Because model names are provider-specific, `--model` and `--effort` require an explicit `--agent`.
 Reattaching to an in-flight run can proceed while the daemon is already running even if the global config file has become invalid, but starting a fresh run still requires valid global config.
 Starting a fresh run also requires a runnable effective pipeline agent.
 If the configured native agent or ACP bridge is unavailable, the run fails before any pipeline step starts instead of reporting command-only validation as a passed gate.

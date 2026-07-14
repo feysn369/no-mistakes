@@ -71,6 +71,8 @@ type PushReceivedParams struct {
 	SkipSteps []types.StepName `json:"skip_steps,omitempty"`
 	Intent    string           `json:"intent,omitempty"`
 	Agent     types.AgentName  `json:"agent,omitempty"`
+	Model     string           `json:"model,omitempty"`
+	Effort    string           `json:"effort,omitempty"`
 }
 
 // GetRunParams requests a single run by ID.
@@ -108,6 +110,8 @@ type RerunParams struct {
 	SkipSteps []types.StepName `json:"skip_steps,omitempty"`
 	Intent    string           `json:"intent,omitempty"`
 	Agent     types.AgentName  `json:"agent,omitempty"`
+	Model     string           `json:"model,omitempty"`
+	Effort    string           `json:"effort,omitempty"`
 }
 
 // SubscribeParams starts an event stream for a run.
@@ -193,16 +197,18 @@ type ShutdownResult struct {
 
 // RunInfo is the IPC representation of a pipeline run.
 type RunInfo struct {
-	ID             string          `json:"id"`
-	RepoID         string          `json:"repo_id"`
-	Branch         string          `json:"branch"`
-	HeadSHA        string          `json:"head_sha"`
-	BaseSHA        string          `json:"base_sha"`
-	Status         types.RunStatus `json:"status"`
-	PRURL          *string         `json:"pr_url,omitempty"`
-	Error          *string         `json:"error,omitempty"`
-	RequestedAgent *string         `json:"requested_agent,omitempty"`
-	ResolvedAgent  *string         `json:"resolved_agent,omitempty"`
+	ID              string          `json:"id"`
+	RepoID          string          `json:"repo_id"`
+	Branch          string          `json:"branch"`
+	HeadSHA         string          `json:"head_sha"`
+	BaseSHA         string          `json:"base_sha"`
+	Status          types.RunStatus `json:"status"`
+	PRURL           *string         `json:"pr_url,omitempty"`
+	Error           *string         `json:"error,omitempty"`
+	RequestedAgent  *string         `json:"requested_agent,omitempty"`
+	ResolvedAgent   *string         `json:"resolved_agent,omitempty"`
+	RequestedModel  *string         `json:"requested_model,omitempty"`
+	RequestedEffort *string         `json:"requested_effort,omitempty"`
 	// AwaitingAgent is true while the run is parked at a gate awaiting the
 	// driving agent's response. AwaitingAgentSince is the unix-seconds time it
 	// parked, so a supervisor can read "parked for N seconds" in one call. Both

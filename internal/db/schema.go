@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS runs (
     parked_ms            INTEGER,
     requested_agent       TEXT,
     resolved_agent        TEXT,
+    requested_model       TEXT,
+    requested_effort      TEXT,
     created_at           INTEGER NOT NULL,
     updated_at           INTEGER NOT NULL
 );
@@ -139,6 +141,8 @@ var migrationStatements = []string{
 	`ALTER TABLE runs ADD COLUMN parked_ms INTEGER`,
 	`ALTER TABLE runs ADD COLUMN requested_agent TEXT`,
 	`ALTER TABLE runs ADD COLUMN resolved_agent TEXT`,
+	`ALTER TABLE runs ADD COLUMN requested_model TEXT`,
+	`ALTER TABLE runs ADD COLUMN requested_effort TEXT`,
 	`ALTER TABLE step_results ADD COLUMN last_activity_at INTEGER`,
 	`ALTER TABLE step_results ADD COLUMN last_activity TEXT`,
 	`ALTER TABLE step_results ADD COLUMN agent_pid INTEGER`,

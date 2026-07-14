@@ -28,6 +28,28 @@ func TestUpdateRunAgentsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpdateRunTuningRoundTrip(t *testing.T) {
+	d := openTestDB(t)
+	repo, err := d.InsertRepo(t.TempDir(), "origin", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunTuning(run.ID, "sonnet", "high"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RequestedModel == nil || *got.RequestedModel != "sonnet" || got.RequestedEffort == nil || *got.RequestedEffort != "high" {
+		t.Fatalf("tuning did not round-trip: %#v", got)
+	}
+}
+
 func TestRunInsertAndGet(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")

@@ -160,12 +160,16 @@ Agents can also call `no-mistakes axi` directly:
 
 ```sh
 no-mistakes axi run --intent "the user's goal"
+no-mistakes axi run --intent "the user's goal" --agent codex --model gpt-5.5 --effort medium
 no-mistakes axi status
 no-mistakes axi respond --action approve
 no-mistakes axi logs --step review --full
 no-mistakes axi abort
 no-mistakes axi abort --run <id>
 ```
+
+Run-scoped `--model` and `--effort` choices require `--agent`, cover every agent-backed step and fix round, and never mutate shared configuration.
+AXI status records the requested choices, conflicting reattach attempts fail, and reruns inherit them unless replaced between runs.
 
 When an agent makes an additional fix after a gate round has already produced fix commits - a newly surfaced finding, a reviewer or pre-merge request, or any other post-completion change - it should commit the fix on top of the existing branch and run `no-mistakes axi run --intent "..."` with the original user intent.
 Never abort-and-restart, reset the branch, or open a new branch in a way that drops prior gate-fix commits, including the pipeline's own `no-mistakes(review|document|lint): ...` commits.

@@ -31,6 +31,8 @@ type Run struct {
 	ParkedMS        int64
 	RequestedAgent  *string
 	ResolvedAgent   *string
+	RequestedModel  *string
+	RequestedEffort *string
 	Intent          *string
 	IntentSource    *string
 	IntentSessionID *string
@@ -39,7 +41,7 @@ type Run struct {
 	UpdatedAt       int64
 }
 
-const runColumns = `id, repo_id, branch, head_sha, base_sha, status, pr_url, error, awaiting_agent_since, COALESCE(parked_ms, 0), requested_agent, resolved_agent, intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
+const runColumns = `id, repo_id, branch, head_sha, base_sha, status, pr_url, error, awaiting_agent_since, COALESCE(parked_ms, 0), requested_agent, resolved_agent, requested_model, requested_effort, intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
 
 func scanRun(row interface {
 	Scan(...any) error
@@ -48,6 +50,7 @@ func scanRun(row interface {
 		&r.ID, &r.RepoID, &r.Branch, &r.HeadSHA, &r.BaseSHA, &r.Status,
 		&r.PRURL, &r.Error, &r.AwaitingAgentSince, &r.ParkedMS,
 		&r.RequestedAgent, &r.ResolvedAgent,
+		&r.RequestedModel, &r.RequestedEffort,
 		&r.Intent, &r.IntentSource, &r.IntentSessionID, &r.IntentScore,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
@@ -59,6 +62,15 @@ func (d *DB) UpdateRunAgents(id, requested, resolved string) error {
 	_, err := d.sql.Exec(`UPDATE runs SET requested_agent = ?, resolved_agent = ?, updated_at = ? WHERE id = ?`, nullableString(requested), nullableString(resolved), now(), id)
 	if err != nil {
 		return fmt.Errorf("update run agents: %w", err)
+	}
+	return nil
+}
+
+// UpdateRunTuning records explicit model and effort choices for auditability.
+func (d *DB) UpdateRunTuning(id, model, effort string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET requested_model = ?, requested_effort = ?, updated_at = ? WHERE id = ?`, nullableString(model), nullableString(effort), now(), id)
+	if err != nil {
+		return fmt.Errorf("update run tuning: %w", err)
 	}
 	return nil
 }
